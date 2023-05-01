@@ -38,6 +38,13 @@ impl ImportUsage {
     }
 }
 
+fn export_name_atom(export: &ModuleExportName) -> JsWord {
+    match export {
+        ModuleExportName::Ident(ident) => ident.sym.clone(),
+        ModuleExportName::Str(str) => str.value.clone(),
+    }
+}
+
 pub struct FileAnalyzer<'a> {
     filename: String,
     // exported_name -> original_name
@@ -66,12 +73,16 @@ impl<'a> FileAnalyzer<'a> {
     fn record_export(&mut self, exported_name: &JsWord, original_name: &JsWord) {
         self.exports.insert(exported_name.clone(), original_name.clone());
     }
-}
-
-fn export_name_atom(export: &ModuleExportName) -> JsWord {
-    match export {
-        ModuleExportName::Ident(ident) => ident.sym.clone(),
-        ModuleExportName::Str(str) => str.value.clone(),
+    
+    // When an import object is destructured, this marks all the object keys as imported.
+    fn record_destructured_import(&mut self, file: JsWord, object: &ObjectPat) {
+        for prop in &object.props {
+            match prop {
+                ObjectPatProp::Assign(assign) =>
+                    self.import_usage.record_import(file.clone(), assign.key.sym.clone()),
+                _ => panic!("unhandle object prop")
+            }
+        }
     }
 }
 
@@ -182,7 +193,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
         }
         decl.visit_children_with(self);
     }
-
+ 
     fn visit_var_declarator(&mut self, var: &VarDeclarator) {
         if !self.namespace_imports.is_empty() {
             if let Some(ref init) = var.init {
@@ -196,22 +207,40 @@ impl<'a> Visit for FileAnalyzer<'a> {
 
                     if let Some(file) = self.namespace_imports.get(&ident.sym) {
                         match &var.name {
-                            Pat::Object(object) => {
-                                for prop in &object.props {
-                                    match prop {
-                                        ObjectPatProp::Assign(assign) =>
-                                            self.import_usage.record_import(
-                                                file.clone(), assign.key.sym.clone()),
-                                        _ => panic!("unhandle object prop")
-                                    }
-                                }
-                            }
+                            Pat::Object(object) =>
+                                self.record_destructured_import(file.clone(), object),
                             _ => panic!("unhandled var name"),
                         }
                     }
                 }
             }
         }
+
+        if let Some(ref init) = var.init {
+            if let Expr::Call(ref call) = **init {
+                match &call.callee {
+                    Callee::Super(_) => {},
+                    Callee::Import(import) => panic!("unhandled import"),
+                    Callee::Expr(expr) => {
+                        if let Expr::Ident(ref ident) = **expr {
+                            match &var.name {
+                                // const named = require('testdata/export_named.ts');
+                                Pat::Ident(binding) => {
+                                    self.namespace_imports.insert(binding.id.sym.clone(), ident.sym.clone());
+                                }
+                                // const {Enum, Fn} = require('testdata/export_named.ts');
+                                Pat::Object(object) =>
+                                    self.record_destructured_import(ident.sym.clone(), &object),
+                                _ => todo!("fuck")
+                            }
+                        }
+                        println!("expr {:?}", var);
+                    }
+                }
+            }
+
+        }
+
         var.visit_children_with(self);
     }
 
@@ -236,12 +265,8 @@ impl<'a> Visit for FileAnalyzer<'a> {
         member_expr.visit_children_with(self);
     }
 
-    /*fn visit_module(&mut self, module: &Module) {
-        if let Some(module_path) = &module.src.value {
-            //self.current_module_exports = HashSet::new();
-            module.visit_children_with(self);
-            //self.modules.insert(module_path.to_string(), self.current_module_exports);
-        }
+    /*fn visit_module_item(&mut self, n: &ModuleItem) {
+        println!("item {:?}", n);
     }*/
 }
 
@@ -460,6 +485,22 @@ mod tests {
                 unused_default_export: false,
                 unused_symbols: HashSet::from([
                     "Enum".into(),
+                ])
+            }
+        )]));
+    }
+
+    #[test]
+    fn require_named() {
+        let results = analyze(vec![
+            "testdata/export_named.ts",
+            "testdata/require_named.ts",
+        ]);
+        assert_eq!(results, HashMap::from([(
+            "testdata/export_named.ts".into(), ModuleResults{
+                unused_default_export: false,
+                unused_symbols: HashSet::from([
+                    "Class".into(),
                 ])
             }
         )]));
