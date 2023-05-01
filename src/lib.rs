@@ -44,6 +44,8 @@ pub struct FileAnalyzer<'a> {
     exports: HashMap<JsWord, JsWord>,
     has_default_export: bool,
     import_usage: &'a mut ImportUsage,
+    // local name -> file
+    namespace_imports: HashMap<JsWord, JsWord>,
 }
 
 impl<'a> FileAnalyzer<'a> {
@@ -52,6 +54,7 @@ impl<'a> FileAnalyzer<'a> {
             filename,
             has_default_export: false,
             exports: HashMap::new(),
+            namespace_imports: HashMap::new(),
             import_usage,
         }
     }
@@ -96,8 +99,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
                         ImportSpecifier::Default(_default_specifier) => {
                             self.import_usage.record_default_import(import_decl.src.value.clone())
                         }
-                        ImportSpecifier::Namespace(_namespace_specifier) => {
-                            //self.record_import(namespace_specifier.local.clone());
+                        ImportSpecifier::Namespace(namespace_specifier) => {
+                            self.namespace_imports.insert(
+                                namespace_specifier.local.sym.clone(),
+                                import_decl.src.value.clone());
                         }
                     }
                 }
@@ -176,6 +181,59 @@ impl<'a> Visit for FileAnalyzer<'a> {
             _ => {}
         }
         decl.visit_children_with(self);
+    }
+
+    fn visit_var_declarator(&mut self, var: &VarDeclarator) {
+        if !self.namespace_imports.is_empty() {
+            if let Some(ref init) = var.init {
+                if let Expr::Ident(ref ident) = **init {
+                    /*
+                    Handle the following:
+
+                    import * as utils from 'testdata/export_named.ts';
+                    const {Class, Fn} = utils;
+                    */
+
+                    if let Some(file) = self.namespace_imports.get(&ident.sym) {
+                        match &var.name {
+                            Pat::Object(object) => {
+                                for prop in &object.props {
+                                    match prop {
+                                        ObjectPatProp::Assign(assign) =>
+                                            self.import_usage.record_import(
+                                                file.clone(), assign.key.sym.clone()),
+                                        _ => panic!("unhandle object prop")
+                                    }
+                                }
+                            }
+                            _ => panic!("unhandled var name"),
+                        }
+                    }
+                }
+            }
+        }
+        var.visit_children_with(self);
+    }
+
+    fn visit_member_expr(&mut self, member_expr: &MemberExpr) {
+        if !self.namespace_imports.is_empty() {
+            if let Expr::Ident(Ident{ref sym, ..}) = *member_expr.obj {
+                /*
+                Handle the following:
+
+                import * as utils from 'testdata/export_named.ts';
+                utils.Const;
+                */
+                if let Some(file) = self.namespace_imports.get(sym) {
+                    match &member_expr.prop {
+                        MemberProp::Ident(ident) =>
+                            self.import_usage.record_import(file.clone(), ident.sym.clone()),
+                        _ => panic!("unhandled"),
+                    }
+                }
+            }
+        }
+        member_expr.visit_children_with(self);
     }
 
     /*fn visit_module(&mut self, module: &Module) {
@@ -347,6 +405,25 @@ mod tests {
     }
 
     #[test]
+    fn aliased_named_exports() {
+        let results = analyze(vec!["testdata/export_named_aliased.ts"]);
+        assert_eq!(results, HashMap::from([(
+            "testdata/export_named_aliased.ts".into(), ModuleResults{
+                unused_default_export: false,
+                unused_symbols: HashSet::from([
+                    "Class".into(),
+                    "Enum".into(),
+                    "Fn".into(),
+                    "Var".into(),
+                    "Interface".into(),
+                    "Const".into(),
+                    "Type".into(),
+                ])
+            }
+        )]));
+    }
+
+    #[test]
     fn aliased_named_exports_imported_partially() {
         let results = analyze(vec![
             "testdata/export_named_aliased.ts",
@@ -370,5 +447,21 @@ mod tests {
             "testdata/import_named_aliased_only_enum.ts",
         ]);
         assert_eq!(results, HashMap::new());
+    }
+
+    #[test]
+    fn namespace_imported_partially() {
+        let results = analyze(vec![
+            "testdata/export_named.ts",
+            "testdata/import_namespace_partial.ts",
+        ]);
+        assert_eq!(results, HashMap::from([(
+            "testdata/export_named.ts".into(), ModuleResults{
+                unused_default_export: false,
+                unused_symbols: HashSet::from([
+                    "Enum".into(),
+                ])
+            }
+        )]));
     }
 }
