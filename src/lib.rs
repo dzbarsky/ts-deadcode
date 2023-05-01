@@ -18,14 +18,14 @@ pub struct ImportUsage {
     // Filename -> symbols
     imports: HashMap<JsWord, HashSet<JsWord>>,
     // Filenames that have default imports used;
-    default_imports: HashSet<JsWord>,
+    //default_imports: HashSet<JsWord>,
 }
 
 impl ImportUsage {
     fn new() -> Self {
         Self {
             imports: HashMap::new(),
-            default_imports: HashSet::new(),
+            //default_imports: HashSet::new(),
         }
     }
 
@@ -33,9 +33,9 @@ impl ImportUsage {
         self.imports.entry(path).or_default().insert(symbol);
     }
 
-    fn record_default_import(&mut self, path: JsWord) {
+    /*fn record_default_import(&mut self, path: JsWord) {
         self.default_imports.insert(path);
-    }
+    }*/
 }
 
 fn export_name_atom(export: &ModuleExportName) -> JsWord {
@@ -49,7 +49,7 @@ pub struct FileAnalyzer<'a> {
     filename: String,
     // exported_name -> original_name
     exports: HashMap<JsWord, JsWord>,
-    has_default_export: bool,
+    //has_default_export: bool,
     import_usage: &'a mut ImportUsage,
     // local name -> file
     namespace_imports: HashMap<JsWord, JsWord>,
@@ -59,16 +59,16 @@ impl<'a> FileAnalyzer<'a> {
     fn new(filename: String, import_usage: &'a mut ImportUsage) -> Self {
         Self {
             filename,
-            has_default_export: false,
+            //has_default_export: false,
             exports: HashMap::new(),
             namespace_imports: HashMap::new(),
             import_usage,
         }
     }
 
-    fn record_default_export(&mut self) {
-        self.has_default_export = true;
-    }
+    //fn record_default_export(&mut self) {
+    //    self.has_default_export = true;
+    //}
 
     fn record_export(&mut self, exported_name: &JsWord, original_name: &JsWord) {
         self.exports.insert(exported_name.clone(), original_name.clone());
@@ -84,6 +84,26 @@ impl<'a> FileAnalyzer<'a> {
             }
         }
     }
+}
+
+
+fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
+    match &call.callee {
+        Callee::Super(_) => {},
+        Callee::Import(import) => panic!("unhandled import"),
+        // Handle `require('filename')`
+        Callee::Expr(expr) => {
+            if let Expr::Ident(ref ident) = **expr {
+                if ident.sym == JsWord::from("require") {
+                    match *call.args[0].expr {
+                        Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
+                        _ => panic!("unhandled non-literal require")
+                    }
+                }
+            }
+        },
+    }
+    return None
 }
 
 impl<'a> Visit for FileAnalyzer<'a> {
@@ -108,7 +128,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             );*/
                         }
                         ImportSpecifier::Default(_default_specifier) => {
-                            self.import_usage.record_default_import(import_decl.src.value.clone())
+                            self.import_usage.record_import(import_decl.src.value.clone(), "default".into())
                         }
                         ImportSpecifier::Namespace(namespace_specifier) => {
                             self.namespace_imports.insert(
@@ -181,7 +201,8 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             //self.record_export(namespace_specifier.name.sym.clone());
                         }
                         ExportSpecifier::Default(default_specifier) => {
-                            self.record_default_export();
+                            self.record_export(&"default".into(), &"default".into());
+                            //self.record_default_export();
                             println!("{}: default {:?}", self.filename, default_specifier);
                             //self.record_export(default_specifier.exported.sym.clone());
                         }
@@ -218,27 +239,19 @@ impl<'a> Visit for FileAnalyzer<'a> {
 
         if let Some(ref init) = var.init {
             if let Expr::Call(ref call) = **init {
-                match &call.callee {
-                    Callee::Super(_) => {},
-                    Callee::Import(import) => panic!("unhandled import"),
-                    Callee::Expr(expr) => {
-                        if let Expr::Ident(ref ident) = **expr {
-                            match &var.name {
-                                // const named = require('testdata/export_named.ts');
-                                Pat::Ident(binding) => {
-                                    self.namespace_imports.insert(binding.id.sym.clone(), ident.sym.clone());
-                                }
-                                // const {Enum, Fn} = require('testdata/export_named.ts');
-                                Pat::Object(object) =>
-                                    self.record_destructured_import(ident.sym.clone(), &object),
-                                _ => todo!("fuck")
-                            }
+                if let Some(filename) = extract_require_call(call) {
+                    match &var.name {
+                        // const named = require('testdata/export_named.ts');
+                        Pat::Ident(binding) => {
+                            self.namespace_imports.insert(binding.id.sym.clone(), filename.clone());
                         }
-                        println!("expr {:?}", var);
+                        // const {Enum, Fn} = require('testdata/export_named.ts');
+                        Pat::Object(object) =>
+                            self.record_destructured_import(filename.clone(), &object),
+                        _ => todo!("fuck")
                     }
                 }
             }
-
         }
 
         var.visit_children_with(self);
@@ -263,6 +276,21 @@ impl<'a> Visit for FileAnalyzer<'a> {
             }
         }
         member_expr.visit_children_with(self);
+
+        /*
+        Handle following cases:
+          - require('testdata/export_named.ts').Interface
+          - require('testdata/export_named.ts').default
+        */
+        if let Expr::Call(ref call) = *member_expr.obj {
+            if let Some(filename) = extract_require_call(call) {
+                match &member_expr.prop {
+                    MemberProp::Ident(ident) =>
+                        self.import_usage.record_import(filename.clone(), ident.sym.clone()),
+                    _ => panic!("unhandled"),
+                }
+            }
+        }
     }
 
     /*fn visit_module_item(&mut self, n: &ModuleItem) {
@@ -340,7 +368,8 @@ impl Analyzer {
 
         self.exports.insert(visitor.filename, ModuleExports{
             exports: visitor.exports,
-            has_default_export: visitor.has_default_export,
+            has_default_export: false,
+            //has_default_export: visitor.has_default_export,
         });
     }
 
@@ -353,9 +382,9 @@ impl Analyzer {
             };
             println!("State: {:?}", self.import_usage);
             let file_atom = &file.clone().into();
-            if exports.has_default_export {
+            /*if exports.has_default_export {
                 module_results.unused_default_export = self.import_usage.default_imports.contains(file_atom);
-            }
+            }*/
             let imports = self.import_usage.imports.get(file_atom);
             for (exported_name, original_name) in exports.exports {
                 //if !imports.is_some_and(|v| v.contains(&exported_name)) {

@@ -1,4 +1,4 @@
-//require('testdata/export_named.ts').Interface;
+require('testdata/export_named.ts').Interface;
 
 const named = require('testdata/export_named.ts');
 
