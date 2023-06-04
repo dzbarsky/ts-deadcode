@@ -331,6 +331,11 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     Expr::Call(ref call) => extract_require_call(call),
                     _ => None,
                 },
+                // const named = await import('testdata/export_named.ts');
+                Expr::Await(ref await_expr) => match *await_expr.arg {
+                    Expr::Call(ref call) => extract_import_call(call),
+                    _ => None,
+                }
                 _ => None,
             };
 
