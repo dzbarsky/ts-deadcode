@@ -26,7 +26,7 @@ fn main() {
     let dir = std::env::args().nth(1).unwrap();
     let dir_path = Path::new(&dir);
 
-    visit_dirs(&dir_path, &mut |entry: &DirEntry| {
+    visit_dirs(dir_path, &mut |entry: &DirEntry| {
         let file_path = entry.path();
 
         //println!("entry {:?}", entry);

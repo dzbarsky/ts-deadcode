@@ -100,11 +100,11 @@ impl<'a> FileAnalyzer<'a> {
 fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
     match &call.callee {
         Callee::Super(_) => {},
-        Callee::Import(import) => panic!("unhandled import"),
+        Callee::Import(_import) => panic!("unhandled import"),
         // Handle `require('filename')`
         Callee::Expr(expr) => {
             if let Expr::Ident(ref ident) = **expr {
-                if ident.sym == JsWord::from("require") {
+                if ident.sym == *"require" {
                     match *call.args[0].expr {
                         Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
                         _ => println!("WARNING: unhandled non-literal require")
@@ -113,7 +113,7 @@ fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
             }
         },
     }
-    return None
+    None
 }
 
 impl<'a> Visit for FileAnalyzer<'a> {
@@ -226,7 +226,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             //println!("{}: namespace {:?}", self.filename, atom);
                             //self.record_export(namespace_specifier.name.sym.clone());
                         }
-                        ExportSpecifier::Default(default_specifier) => {
+                        ExportSpecifier::Default(_default_specifier) => {
                             self.record_export(&"default".into(), &"default".into());
                             //self.record_default_export();
                             //println!("{}: default {:?}", self.filename, default_specifier);
@@ -236,10 +236,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 }
             }
             ModuleDecl::ExportAll(_export_all) => {}
-            ModuleDecl::ExportDefaultDecl(export_default_decl) => {
+            ModuleDecl::ExportDefaultDecl(_export_default_decl) => {
                 self.record_export(&"default".into(), &"default".into())
             }
-            ModuleDecl::ExportDefaultExpr(export_default_decl) => {
+            ModuleDecl::ExportDefaultExpr(_export_default_decl) => {
                 self.record_export(&"default".into(), &"default".into())
             }
             _ => {
@@ -277,11 +277,11 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     match &var.name {
                         // const named = require('testdata/export_named.ts');
                         Pat::Ident(binding) => {
-                            self.namespace_imports.insert(binding.id.sym.clone(), filename.clone());
+                            self.namespace_imports.insert(binding.id.sym.clone(), filename);
                         }
                         // const {Enum, Fn} = require('testdata/export_named.ts');
                         Pat::Object(object) =>
-                            self.record_destructured_import(filename.clone(), &object),
+                            self.record_destructured_import(filename, object),
                         _ => todo!("fuck")
                     }
                 }
@@ -320,7 +320,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
             if let Some(filename) = extract_require_call(call) {
                 match &member_expr.prop {
                     MemberProp::Ident(ident) =>
-                        self.import_usage.record_import(filename.clone(), ident.sym.clone()),
+                        self.import_usage.record_import(filename, ident.sym.clone()),
                     _ => panic!("unhandled"),
                 }
             }
