@@ -153,11 +153,10 @@ fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
 fn extract_import_call(call: &CallExpr) -> Option<JsWord> {
     match &call.callee {
         Callee::Super(_) => {}
-        Callee::Import(import) =>
-            match *call.args[0].expr {
-                Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
-                _ => println!("WARNING: unhandled non-literal require"),
-            }
+        Callee::Import(import) => match *call.args[0].expr {
+            Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
+            _ => println!("WARNING: unhandled non-literal require"),
+        },
         Callee::Expr(expr) => {}
     }
     None
@@ -300,9 +299,9 @@ impl<'a> Visit for FileAnalyzer<'a> {
     }
 
     fn visit_var_declarator(&mut self, var: &VarDeclarator) {
-        if !self.namespace_imports.is_empty() {
-            if let Some(ref init) = var.init {
-                if let Expr::Ident(ref ident) = **init {
+        if let Some(ref init) = var.init {
+            let filename = match **init {
+                Expr::Ident(ref ident) => {
                     /*
                     Handle the following:
 
@@ -310,20 +309,17 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     const {Class, Fn} = utils;
                     */
 
-                    if let Some(file) = self.namespace_imports.get(&ident.sym) {
-                        match &var.name {
+                    match self.namespace_imports.get(&ident.sym) {
+                        Some(file) => match &var.name {
                             Pat::Object(object) => {
-                                self.record_destructured_import(file.clone(), object)
+                                self.record_destructured_import(file.clone(), object);
+                                None
                             }
                             _ => panic!("unhandled var name"),
-                        }
+                        },
+                        None => None,
                     }
                 }
-            }
-        }
-
-        if let Some(ref init) = var.init {
-            let filename = match **init {
                 // const named = require('testdata/export_named.ts');
                 Expr::Call(ref call) => extract_require_call(call),
                 // const named = require('testdata/export_named.ts') as typeof import('testdata/export_named.ts');
@@ -335,7 +331,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 Expr::Await(ref await_expr) => match *await_expr.arg {
                     Expr::Call(ref call) => extract_import_call(call),
                     _ => None,
-                }
+                },
                 _ => None,
             };
 
@@ -351,9 +347,13 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     _ => todo!("fuck"),
                 }
             }
-        }
 
-        var.visit_children_with(self);
+            var.visit_children_with(self);
+
+            // TODO(zbarsky): pop bindings we added!
+        } else {
+            var.visit_children_with(self);
+        }
     }
 
     fn visit_member_expr(&mut self, member_expr: &MemberExpr) {
@@ -399,7 +399,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             self.handle_potential_import_call_member_expr(call, member_expr)
                         }
                         _ => {}
-                    }
+                    },
                     _ => {}
                 }
             }
