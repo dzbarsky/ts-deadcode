@@ -1,8 +1,8 @@
-use std::io;
 use std::fs::{self, DirEntry};
+use std::io;
 use std::path::Path;
 
-use ts_deadcode::{Analyzer};
+use ts_deadcode::Analyzer;
 
 fn visit_dirs(dir: &Path, cb: &mut dyn for<'a> FnMut(&'a DirEntry)) -> io::Result<()> {
     if dir.is_dir() {

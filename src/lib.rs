@@ -94,6 +94,18 @@ impl<'a> FileAnalyzer<'a> {
             }
         }
     }
+
+    // Record usage of:
+    //   require('testdata/export_named.ts').Interface
+    fn handle_potential_require_call_member_expr(&mut self, call: &CallExpr, member_expr: &MemberExpr) {
+        if let Some(filename) = extract_require_call(call) {
+            match &member_expr.prop {
+                MemberProp::Ident(ident) =>
+                    self.import_usage.record_import(filename, ident.sym.clone()),
+                _ => panic!("unhandled"),
+            }
+        }
+    }
 }
 
 
@@ -320,22 +332,28 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 }
             }
         }
-        member_expr.visit_children_with(self);
 
-        /*
-        Handle following cases:
-          - require('testdata/export_named.ts').Interface
-          - require('testdata/export_named.ts').default
-        */
-        if let Expr::Call(ref call) = *member_expr.obj {
-            if let Some(filename) = extract_require_call(call) {
-                match &member_expr.prop {
-                    MemberProp::Ident(ident) =>
-                        self.import_usage.record_import(filename, ident.sym.clone()),
-                    _ => panic!("unhandled"),
+        match *member_expr.obj {
+            // require('testdata/export_named.ts').Interface
+            // require('testdata/export_named.ts').default
+            Expr::Call(ref call) => self.handle_potential_require_call_member_expr(call, member_expr),
+            // (require('testdata/export_named.ts') as import('testdata/export_named.ts')).Interface
+            Expr::Paren(ref paren_expr) => {
+                // TODO(zbarsky): would be nice to have box_deref_patterns
+                match *paren_expr.expr {
+                    Expr::TsAs(ref as_expr) => {
+                        match *as_expr.expr {
+                            Expr::Call(ref call) => self.handle_potential_require_call_member_expr(call, member_expr),
+                            _ => {},
+                        }
+                    }
+                    _ => {},
                 }
             }
+            _ => {},
         }
+    
+        member_expr.visit_children_with(self);
     }
 
     /*fn visit_module_item(&mut self, n: &ModuleItem) {
