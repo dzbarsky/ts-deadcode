@@ -134,7 +134,7 @@ impl<'a> FileAnalyzer<'a> {
 fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
     match &call.callee {
         Callee::Super(_) => {}
-        Callee::Import(import) => panic!("unhandled import"),
+        Callee::Import(_import) => {}
         // Handle `require('filename')`
         Callee::Expr(expr) => {
             if let Expr::Ident(ref ident) = **expr {
@@ -153,11 +153,11 @@ fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
 fn extract_import_call(call: &CallExpr) -> Option<JsWord> {
     match &call.callee {
         Callee::Super(_) => {}
-        Callee::Import(import) => match *call.args[0].expr {
+        Callee::Import(_import) => match *call.args[0].expr {
             Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
             _ => println!("WARNING: unhandled non-literal require"),
         },
-        Callee::Expr(expr) => {}
+        Callee::Expr(_expr) => {}
     }
     None
 }
@@ -380,7 +380,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
             // require('testdata/export_named.ts').Interface
             // require('testdata/export_named.ts').default
             Expr::Call(ref call) => {
-                println!("MEMBER EXPR: {:?}", member_expr);
+                //println!("MEMBER EXPR: {:?}", member_expr);
                 self.handle_potential_require_call_member_expr(call, member_expr)
             }
             // TODO(zbarsky): would be nice to have box_deref_patterns
@@ -407,6 +407,41 @@ impl<'a> Visit for FileAnalyzer<'a> {
         }
 
         member_expr.visit_children_with(self);
+    }
+
+    fn visit_call_expr(&mut self, call_expr: &CallExpr) {
+        let mut sym = None;
+        let mut filename = None;
+        // import('testdata/export_named.ts').then(mod => mod.Enum);
+        if let Callee::Expr(ref callee_expr) = call_expr.callee {
+            if let Expr::Member(ref member_expr) = **callee_expr {
+                if let MemberProp::Ident(ident_expr) = &member_expr.prop {
+                    if ident_expr.sym == *"then" {
+                        if let Expr::Call(ref call) = *member_expr.obj {
+                            if let Expr::Arrow(ref arrow_expr) = *call_expr.args[0].expr {
+                                if let Pat::Ident(ref ident) = arrow_expr.params[0] {
+                                    sym = Some(ident.id.sym.clone());
+                                    filename = extract_import_call(call);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        match (sym, filename) {
+            (Some(sym), Some(filename)) => {
+                let prev_binding = self.namespace_imports.insert(sym, filename.clone());
+                println!("{:?} {:?} ", prev_binding, "");
+                //println!("item {:?}", call_expr);
+                call_expr.visit_children_with(self);
+                if let Some(prev_binding) = prev_binding {
+                    self.namespace_imports.insert(prev_binding, filename);
+                }
+            }
+            _ => call_expr.visit_children_with(self),
+        }
     }
 
     /*fn visit_module_item(&mut self, n: &ModuleItem) {
