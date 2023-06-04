@@ -432,12 +432,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
 
         match (sym, filename) {
             (Some(sym), Some(filename)) => {
-                let prev_binding = self.namespace_imports.insert(sym, filename.clone());
-                println!("{:?} {:?} ", prev_binding, "");
-                //println!("item {:?}", call_expr);
+                let prev_binding = self.namespace_imports.insert(sym.clone(), filename);
                 call_expr.visit_children_with(self);
                 if let Some(prev_binding) = prev_binding {
-                    self.namespace_imports.insert(prev_binding, filename);
+                    self.namespace_imports.insert(sym, prev_binding);
                 }
             }
             _ => call_expr.visit_children_with(self),
@@ -770,6 +768,31 @@ mod tests {
                 ModuleResults {
                     unused_default_export: false,
                     unused_symbols: HashSet::from(["default".into(),])
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn import_module_obj_name_collisions() {
+        let results = analyze(vec![
+            "testdata/export_foo.ts",
+            "testdata/export_bar.ts",
+            "testdata/import_foo_bar.ts",
+        ]);
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_foo.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from(["baz".into(),])
+                }
+            ),(
+                "testdata/export_bar.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from(["foo".into(),])
                 }
             )])
         );
