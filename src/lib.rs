@@ -9,7 +9,7 @@ use swc_common::{
     SourceMap,
 };
 use swc_ecma_ast::*;
-use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
+use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
 use swc_ecma_visit::Visit;
 use swc_ecma_visit::VisitWith;
 
@@ -97,7 +97,7 @@ fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
                 if ident.sym == JsWord::from("require") {
                     match *call.args[0].expr {
                         Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
-                        _ => panic!("unhandled non-literal require")
+                        _ => println!("WARNING: unhandled non-literal require")
                     }
                 }
             }
@@ -157,7 +157,19 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                 self.record_export(atom, atom);
                                 println!("{}: var decl {:?}", self.filename, atom);
                             }
-                            _ => panic!("unknown decl.name"),
+                            Pat::Array(array) => {
+                                for elem in &array.elems {
+                                    match elem {
+                                        Some(Pat::Ident(ident)) => {
+                                            let atom = &ident.id.sym;
+                                            self.record_export(atom, atom);
+                                            println!("{}: var decl {:?}", self.filename, atom);
+                                        }
+                                        _ => panic!("unknown array export pat: {:?}", elem),
+                                    }
+                                }
+                            }
+                            _ => panic!("unknown decl.name: {:?}", decl.name),
                         }
                     }
                 }
@@ -342,7 +354,10 @@ impl Analyzer {
 
         let lexer = Lexer::new(
             // We want to parse ecmascript
-            Syntax::Typescript(Default::default()),
+            Syntax::Typescript(TsConfig{
+		tsx: true,
+                ..Default::default()
+            }),
             // EsVersion defaults to es5
             Default::default(),
             StringInput::from(&*fm),
@@ -421,6 +436,25 @@ mod tests {
         let results = analyze(vec!["testdata/export_named.ts"]);
         assert_eq!(results, HashMap::from([(
             "testdata/export_named.ts".into(), ModuleResults{
+                unused_default_export: false,
+                unused_symbols: HashSet::from([
+                    "Class".into(),
+                    "Enum".into(),
+                    "Fn".into(),
+                    "Var".into(),
+                    "Interface".into(),
+                    "Const".into(),
+                    "Type".into(),
+                ])
+            }
+        )]));
+    }
+
+    #[test]
+    fn named_exports_inline() {
+        let results = analyze(vec!["testdata/export_decl.ts"]);
+        assert_eq!(results, HashMap::from([(
+            "testdata/export_decl.ts".into(), ModuleResults{
                 unused_default_export: false,
                 unused_symbols: HashSet::from([
                     "Class".into(),
