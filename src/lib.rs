@@ -13,7 +13,7 @@ use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
 use swc_ecma_visit::Visit;
 use swc_ecma_visit::VisitWith;
 
- #[derive(Debug)]
+#[derive(Debug)]
 pub struct ImportUsage {
     // Filename -> symbols
     imports: HashMap<JsWord, HashSet<JsWord>>,
@@ -71,47 +71,52 @@ impl<'a> FileAnalyzer<'a> {
     //}
 
     fn record_export(&mut self, exported_name: &JsWord, original_name: &JsWord) {
-        self.exports.insert(exported_name.clone(), original_name.clone());
+        self.exports
+            .insert(exported_name.clone(), original_name.clone());
     }
-    
+
     // When an import object is destructured, this marks all the object keys as imported.
     fn record_destructured_import(&mut self, file: JsWord, object: &ObjectPat) {
         for prop in &object.props {
             match prop {
-                ObjectPatProp::Assign(assign) =>
-                    self.import_usage.record_import(file.clone(), assign.key.sym.clone()),
-                ObjectPatProp::KeyValue(kv) => {
-                    match &kv.key {
-                        PropName::Ident(ident) => {
-                            self.import_usage.record_import(file.clone(), ident.sym.clone());
-                        }
-                        _ => {
-                            panic!("unhandle object prop: {:?}", prop);
-                        }
+                ObjectPatProp::Assign(assign) => self
+                    .import_usage
+                    .record_import(file.clone(), assign.key.sym.clone()),
+                ObjectPatProp::KeyValue(kv) => match &kv.key {
+                    PropName::Ident(ident) => {
+                        self.import_usage
+                            .record_import(file.clone(), ident.sym.clone());
                     }
-                }
-                _ => panic!("unhandle object prop: {:?}", prop)
+                    _ => {
+                        panic!("unhandle object prop: {:?}", prop);
+                    }
+                },
+                _ => panic!("unhandle object prop: {:?}", prop),
             }
         }
     }
 
     // Record usage of:
     //   require('testdata/export_named.ts').Interface
-    fn handle_potential_require_call_member_expr(&mut self, call: &CallExpr, member_expr: &MemberExpr) {
+    fn handle_potential_require_call_member_expr(
+        &mut self,
+        call: &CallExpr,
+        member_expr: &MemberExpr,
+    ) {
         if let Some(filename) = extract_require_call(call) {
             match &member_expr.prop {
-                MemberProp::Ident(ident) =>
-                    self.import_usage.record_import(filename, ident.sym.clone()),
+                MemberProp::Ident(ident) => {
+                    self.import_usage.record_import(filename, ident.sym.clone())
+                }
                 _ => panic!("unhandled"),
             }
         }
     }
 }
 
-
 fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
     match &call.callee {
-        Callee::Super(_) => {},
+        Callee::Super(_) => {}
         Callee::Import(_import) => panic!("unhandled import"),
         // Handle `require('filename')`
         Callee::Expr(expr) => {
@@ -119,11 +124,11 @@ fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
                 if ident.sym == *"require" {
                     match *call.args[0].expr {
                         Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
-                        _ => println!("WARNING: unhandled non-literal require")
+                        _ => println!("WARNING: unhandled non-literal require"),
                     }
                 }
             }
-        },
+        }
     }
     None
 }
@@ -141,7 +146,8 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             };
 
                             //println!("named import from {:?}: {:?}", import_decl.src, atom);
-                            self.import_usage.record_import(import_decl.src.value.clone(), atom);
+                            self.import_usage
+                                .record_import(import_decl.src.value.clone(), atom);
                             /*self.record_import(
                                 named_specifier
                                     .imported
@@ -151,12 +157,14 @@ impl<'a> Visit for FileAnalyzer<'a> {
                         }
                         ImportSpecifier::Default(_default_specifier) => {
                             //println!("USING {:?}", import_decl.src.value.clone());
-                            self.import_usage.record_import(import_decl.src.value.clone(), "default".into())
+                            self.import_usage
+                                .record_import(import_decl.src.value.clone(), "default".into())
                         }
                         ImportSpecifier::Namespace(namespace_specifier) => {
                             self.namespace_imports.insert(
                                 namespace_specifier.local.sym.clone(),
-                                import_decl.src.value.clone());
+                                import_decl.src.value.clone(),
+                            );
                         }
                     }
                 }
@@ -260,7 +268,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
         }
         decl.visit_children_with(self);
     }
- 
+
     fn visit_var_declarator(&mut self, var: &VarDeclarator) {
         if !self.namespace_imports.is_empty() {
             if let Some(ref init) = var.init {
@@ -274,8 +282,9 @@ impl<'a> Visit for FileAnalyzer<'a> {
 
                     if let Some(file) = self.namespace_imports.get(&ident.sym) {
                         match &var.name {
-                            Pat::Object(object) =>
-                                self.record_destructured_import(file.clone(), object),
+                            Pat::Object(object) => {
+                                self.record_destructured_import(file.clone(), object)
+                            }
                             _ => panic!("unhandled var name"),
                         }
                     }
@@ -288,12 +297,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 // const named = require('testdata/export_named.ts');
                 Expr::Call(ref call) => extract_require_call(call),
                 // const named = require('testdata/export_named.ts') as typeof import('testdata/export_named.ts');
-                Expr::TsAs(ref as_expr) => {
-                    match *as_expr.expr {
-                        Expr::Call(ref call) => extract_require_call(call),
-                        _ => None,
-                    }
-                }
+                Expr::TsAs(ref as_expr) => match *as_expr.expr {
+                    Expr::Call(ref call) => extract_require_call(call),
+                    _ => None,
+                },
                 _ => None,
             };
 
@@ -301,12 +308,12 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 match &var.name {
                     // const named = require('testdata/export_named.ts');
                     Pat::Ident(binding) => {
-                        self.namespace_imports.insert(binding.id.sym.clone(), filename);
+                        self.namespace_imports
+                            .insert(binding.id.sym.clone(), filename);
                     }
                     // const {Enum, Fn} = require('testdata/export_named.ts');
-                    Pat::Object(object) =>
-                        self.record_destructured_import(filename, object),
-                    _ => todo!("fuck")
+                    Pat::Object(object) => self.record_destructured_import(filename, object),
+                    _ => todo!("fuck"),
                 }
             }
         }
@@ -316,7 +323,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
 
     fn visit_member_expr(&mut self, member_expr: &MemberExpr) {
         if !self.namespace_imports.is_empty() {
-            if let Expr::Ident(Ident{ref sym, ..}) = *member_expr.obj {
+            if let Expr::Ident(Ident { ref sym, .. }) = *member_expr.obj {
                 /*
                 Handle the following:
 
@@ -325,8 +332,9 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 */
                 if let Some(file) = self.namespace_imports.get(sym) {
                     match &member_expr.prop {
-                        MemberProp::Ident(ident) =>
-                            self.import_usage.record_import(file.clone(), ident.sym.clone()),
+                        MemberProp::Ident(ident) => self
+                            .import_usage
+                            .record_import(file.clone(), ident.sym.clone()),
                         _ => println!("WARNING: unhandled MemberExpr: {:?}", member_expr),
                     }
                 }
@@ -336,23 +344,25 @@ impl<'a> Visit for FileAnalyzer<'a> {
         match *member_expr.obj {
             // require('testdata/export_named.ts').Interface
             // require('testdata/export_named.ts').default
-            Expr::Call(ref call) => self.handle_potential_require_call_member_expr(call, member_expr),
+            Expr::Call(ref call) => {
+                self.handle_potential_require_call_member_expr(call, member_expr)
+            }
             // (require('testdata/export_named.ts') as import('testdata/export_named.ts')).Interface
             Expr::Paren(ref paren_expr) => {
                 // TODO(zbarsky): would be nice to have box_deref_patterns
                 match *paren_expr.expr {
-                    Expr::TsAs(ref as_expr) => {
-                        match *as_expr.expr {
-                            Expr::Call(ref call) => self.handle_potential_require_call_member_expr(call, member_expr),
-                            _ => {},
+                    Expr::TsAs(ref as_expr) => match *as_expr.expr {
+                        Expr::Call(ref call) => {
+                            self.handle_potential_require_call_member_expr(call, member_expr)
                         }
-                    }
-                    _ => {},
+                        _ => {}
+                    },
+                    _ => {}
                 }
             }
-            _ => {},
+            _ => {}
         }
-    
+
         member_expr.visit_children_with(self);
     }
 
@@ -374,7 +384,6 @@ pub struct ModuleResults {
 }
 pub type AnalysisResults = HashMap<String, ModuleResults>;
 
-
 pub struct Analyzer {
     import_usage: ImportUsage,
 
@@ -383,7 +392,6 @@ pub struct Analyzer {
 
     exports: HashMap<String, ModuleExports>,
 }
-
 
 impl Analyzer {
     pub fn new() -> Self {
@@ -401,12 +409,15 @@ impl Analyzer {
         let fm = self.cm.load_file(file_path).expect("failed to load file");
 
         // Create a visitor to traverse the ASTs and record imported and exported symbols
-        let mut visitor = FileAnalyzer::new(file_path.to_str().unwrap().to_owned(), &mut self.import_usage);
+        let mut visitor = FileAnalyzer::new(
+            file_path.to_str().unwrap().to_owned(),
+            &mut self.import_usage,
+        );
 
         let lexer = Lexer::new(
             // We want to parse ecmascript
-            Syntax::Typescript(TsConfig{
-		tsx: true,
+            Syntax::Typescript(TsConfig {
+                tsx: true,
                 decorators: true,
                 ..Default::default()
             }),
@@ -433,17 +444,20 @@ impl Analyzer {
         // Traverse the AST and record imported and exported symbols
         module.visit_with(&mut visitor);
 
-        self.exports.insert(visitor.filename, ModuleExports{
-            exports: visitor.exports,
-            has_default_export: false,
-            //has_default_export: visitor.has_default_export,
-        });
+        self.exports.insert(
+            visitor.filename,
+            ModuleExports {
+                exports: visitor.exports,
+                has_default_export: false,
+                //has_default_export: visitor.has_default_export,
+            },
+        );
     }
 
     pub fn finalize(self) -> AnalysisResults {
         let mut results = AnalysisResults::new();
         for (file, exports) in self.exports {
-            let mut module_results = ModuleResults{
+            let mut module_results = ModuleResults {
                 unused_default_export: false,
                 unused_symbols: HashSet::new(),
             };
@@ -478,7 +492,7 @@ mod tests {
     fn analyze(filepaths: Vec<&str>) -> AnalysisResults {
         let mut analyzer = Analyzer::new();
         for path in filepaths {
-           analyzer.add_file(Path::new(path));
+            analyzer.add_file(Path::new(path));
         }
         analyzer.finalize()
     }
@@ -486,52 +500,65 @@ mod tests {
     #[test]
     fn named_exports() {
         let results = analyze(vec!["testdata/export_named.ts"]);
-        assert_eq!(results, HashMap::from([(
-            "testdata/export_named.ts".into(), ModuleResults{
-                unused_default_export: false,
-                unused_symbols: HashSet::from([
-                    "Class".into(),
-                    "Enum".into(),
-                    "Fn".into(),
-                    "Var".into(),
-                    "Interface".into(),
-                    "Const".into(),
-                    "Type".into(),
-                ])
-            }
-        )]));
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_named.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from([
+                        "Class".into(),
+                        "Enum".into(),
+                        "Fn".into(),
+                        "Var".into(),
+                        "Interface".into(),
+                        "Const".into(),
+                        "Type".into(),
+                    ])
+                }
+            )])
+        );
     }
 
     #[test]
     fn named_exports_inline() {
         let results = analyze(vec!["testdata/export_decl.ts"]);
-        assert_eq!(results, HashMap::from([(
-            "testdata/export_decl.ts".into(), ModuleResults{
-                unused_default_export: false,
-                unused_symbols: HashSet::from([
-                    "Class".into(),
-                    "Enum".into(),
-                    "Fn".into(),
-                    "Var".into(),
-                    "Interface".into(),
-                    "Const".into(),
-                    "Type".into(),
-                ])
-            }
-        )]));
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_decl.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from([
+                        "Class".into(),
+                        "Enum".into(),
+                        "Fn".into(),
+                        "Var".into(),
+                        "Interface".into(),
+                        "Const".into(),
+                        "Type".into(),
+                    ])
+                }
+            )])
+        );
     }
 
     #[test]
     fn named_exports_imported_partially() {
-        let results = analyze(vec!["testdata/export_named.ts", "testdata/import_named_partial_no_class.ts"]);
-        assert_eq!(results, HashMap::from([(
-            "testdata/export_named.ts".into(), ModuleResults{
-                unused_default_export: false,
-                unused_symbols: HashSet::from([
-                    "Class".into(),
-                ])
-            }
-        )]));
+        let results = analyze(vec![
+            "testdata/export_named.ts",
+            "testdata/import_named_partial_no_class.ts",
+        ]);
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_named.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from(["Class".into(),])
+                }
+            )])
+        );
     }
 
     #[test]
@@ -547,20 +574,24 @@ mod tests {
     #[test]
     fn aliased_named_exports() {
         let results = analyze(vec!["testdata/export_named_aliased.ts"]);
-        assert_eq!(results, HashMap::from([(
-            "testdata/export_named_aliased.ts".into(), ModuleResults{
-                unused_default_export: false,
-                unused_symbols: HashSet::from([
-                    "Class".into(),
-                    "Enum".into(),
-                    "Fn".into(),
-                    "Var".into(),
-                    "Interface".into(),
-                    "Const".into(),
-                    "Type".into(),
-                ])
-            }
-        )]));
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_named_aliased.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from([
+                        "Class".into(),
+                        "Enum".into(),
+                        "Fn".into(),
+                        "Var".into(),
+                        "Interface".into(),
+                        "Const".into(),
+                        "Type".into(),
+                    ])
+                }
+            )])
+        );
     }
 
     #[test]
@@ -569,14 +600,16 @@ mod tests {
             "testdata/export_named_aliased.ts",
             "testdata/import_named_aliased_no_enum.ts",
         ]);
-        assert_eq!(results, HashMap::from([(
-            "testdata/export_named_aliased.ts".into(), ModuleResults{
-                unused_default_export: false,
-                unused_symbols: HashSet::from([
-                    "Enum".into(),
-                ])
-            }
-        )]));
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_named_aliased.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from(["Enum".into(),])
+                }
+            )])
+        );
     }
 
     #[test]
@@ -595,14 +628,16 @@ mod tests {
             "testdata/export_named.ts",
             "testdata/import_namespace_partial.ts",
         ]);
-        assert_eq!(results, HashMap::from([(
-            "testdata/export_named.ts".into(), ModuleResults{
-                unused_default_export: false,
-                unused_symbols: HashSet::from([
-                    "Enum".into(),
-                ])
-            }
-        )]));
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_named.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from(["Enum".into(),])
+                }
+            )])
+        );
     }
 
     #[test]
@@ -611,14 +646,16 @@ mod tests {
             "testdata/export_named.ts",
             "testdata/require_named.ts",
         ]);
-        assert_eq!(results, HashMap::from([(
-            "testdata/export_named.ts".into(), ModuleResults{
-                unused_default_export: false,
-                unused_symbols: HashSet::from([
-                    "Class".into(),
-                ])
-            }
-        )]));
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_named.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from(["Class".into(),])
+                }
+            )])
+        );
     }
 
     #[test]
@@ -630,13 +667,15 @@ mod tests {
             "testdata/export_default_object.ts",
             "testdata/import_defaults.ts",
         ]);
-        assert_eq!(results, HashMap::from([(
-            "testdata/export_default_interface.ts".into(), ModuleResults{
-                unused_default_export: false,
-                unused_symbols: HashSet::from([
-                    "default".into(),
-                ])
-            }
-        )]));
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_default_interface.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from(["default".into(),])
+                }
+            )])
+        );
     }
 }
