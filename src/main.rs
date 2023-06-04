@@ -1,6 +1,8 @@
 use std::fs::{self, DirEntry};
 use std::io;
 use std::path::Path;
+use swc_ecma_loader::resolvers::node::NodeModulesResolver;
+use swc_ecma_loader::TargetEnv;
 
 use ts_deadcode::Analyzer;
 
@@ -20,7 +22,11 @@ fn visit_dirs(dir: &Path, cb: &mut dyn for<'a> FnMut(&'a DirEntry)) -> io::Resul
 }
 
 fn main() {
-    let mut analyzer = Analyzer::new();
+    let mut analyzer = Analyzer::new(Box::new(NodeModulesResolver::new(
+        TargetEnv::Node,
+        Default::default(),
+        false,
+    )));
 
     // Specify the directory containing the files to be parsed
     let dir = std::env::args().nth(1).unwrap();

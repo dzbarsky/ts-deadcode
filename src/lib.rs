@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::fs::canonicalize;
 
 use swc_atoms::JsWord;
 use swc_common::{
+    FileName,
     errors::{ColorConfig, Handler},
     sync::Lrc,
     SourceMap,
@@ -12,11 +14,12 @@ use swc_ecma_ast::*;
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
 use swc_ecma_visit::Visit;
 use swc_ecma_visit::VisitWith;
+use swc_ecma_loader::resolve::Resolve;
 
 #[derive(Debug)]
 pub struct ImportUsage {
     // Filename -> symbols
-    imports: HashMap<JsWord, HashSet<JsWord>>,
+    imports: HashMap<FileName, HashSet<JsWord>>,
     // Filenames that have default imports used;
     //default_imports: HashSet<JsWord>,
 }
@@ -27,10 +30,6 @@ impl ImportUsage {
             imports: HashMap::new(),
             //default_imports: HashSet::new(),
         }
-    }
-
-    fn record_import(&mut self, path: JsWord, symbol: JsWord) {
-        self.imports.entry(path).or_default().insert(symbol);
     }
 
     /*fn record_default_import(&mut self, path: JsWord) {
@@ -53,22 +52,33 @@ pub struct FileAnalyzer<'a> {
     import_usage: &'a mut ImportUsage,
     // local name -> file
     namespace_imports: HashMap<JsWord, JsWord>,
+
+    resolver: &'a dyn Resolve,
 }
 
 impl<'a> FileAnalyzer<'a> {
-    fn new(filename: String, import_usage: &'a mut ImportUsage) -> Self {
+    fn new(filename: String, resolver: &'a dyn Resolve, import_usage: &'a mut ImportUsage) -> Self {
         Self {
             filename,
             //has_default_export: false,
             exports: HashMap::new(),
             namespace_imports: HashMap::new(),
             import_usage,
+            resolver,
         }
     }
 
-    //fn record_default_export(&mut self) {
-    //    self.has_default_export = true;
-    //}
+    
+    fn record_import(&mut self, path: &JsWord, symbol: JsWord) {
+        match self.resolver.resolve(&FileName::Real(PathBuf::from(self.filename.clone())), path) {
+          Ok(filename) => {
+            self.import_usage.imports.entry(filename).or_default().insert(symbol);
+          }
+          Err(err) => {
+            println!("ERRRR {:?} {:?}", path, err);
+          }
+        }
+    }
 
     fn record_export(&mut self, exported_name: &JsWord, original_name: &JsWord) {
         self.exports
@@ -80,12 +90,10 @@ impl<'a> FileAnalyzer<'a> {
         for prop in &object.props {
             match prop {
                 ObjectPatProp::Assign(assign) => self
-                    .import_usage
-                    .record_import(file.clone(), assign.key.sym.clone()),
+                    .record_import(&file, assign.key.sym.clone()),
                 ObjectPatProp::KeyValue(kv) => match &kv.key {
                     PropName::Ident(ident) => {
-                        self.import_usage
-                            .record_import(file.clone(), ident.sym.clone());
+                        self.record_import(&file, ident.sym.clone());
                     }
                     _ => {
                         panic!("unhandle object prop: {:?}", prop);
@@ -106,7 +114,7 @@ impl<'a> FileAnalyzer<'a> {
         if let Some(filename) = extract_require_call(call) {
             match &member_expr.prop {
                 MemberProp::Ident(ident) => {
-                    self.import_usage.record_import(filename, ident.sym.clone())
+                    self.record_import(&filename, ident.sym.clone())
                 }
                 _ => panic!("unhandled"),
             }
@@ -123,7 +131,7 @@ impl<'a> FileAnalyzer<'a> {
         if let Some(filename) = extract_import_call(call) {
             match &member_expr.prop {
                 MemberProp::Ident(ident) => {
-                    self.import_usage.record_import(filename, ident.sym.clone())
+                    self.record_import(&filename, ident.sym.clone())
                 }
                 _ => panic!("unhandled"),
             }
@@ -174,9 +182,9 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                 None => named_specifier.local.sym.clone(),
                             };
 
-                            //println!("named import from {:?}: {:?}", import_decl.src, atom);
-                            self.import_usage
-                                .record_import(import_decl.src.value.clone(), atom);
+                            //println!("named import from {:?}: {:?}", import_decl.src.value, atom);
+                            self.record_import(&import_decl.src.value, atom);
+                            //println!("named import from {:?}: {:?}", resolved, atom);
                             /*self.record_import(
                                 named_specifier
                                     .imported
@@ -186,8 +194,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                         }
                         ImportSpecifier::Default(_default_specifier) => {
                             //println!("USING {:?}", import_decl.src.value.clone());
-                            self.import_usage
-                                .record_import(import_decl.src.value.clone(), "default".into())
+                            self.record_import(&import_decl.src.value, "default".into())
                         }
                         ImportSpecifier::Namespace(namespace_specifier) => {
                             self.namespace_imports.insert(
@@ -378,9 +385,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 */
                 if let Some(file) = self.namespace_imports.get(sym) {
                     match &member_expr.prop {
-                        MemberProp::Ident(ident) => self
-                            .import_usage
-                            .record_import(file.clone(), ident.sym.clone()),
+                        MemberProp::Ident(ident) => {
+                            let file = file.clone();
+                            self.record_import(&file, ident.sym.clone());
+                        }
                         _ => println!("WARNING: unhandled MemberExpr: {:?}", member_expr),
                     }
                 }
@@ -472,7 +480,7 @@ pub struct ModuleResults {
     pub unused_default_export: bool,
     pub unused_symbols: HashSet<JsWord>,
 }
-pub type AnalysisResults = HashMap<String, ModuleResults>;
+pub type AnalysisResults = HashMap<FileName, ModuleResults>;
 
 pub struct Analyzer {
     import_usage: ImportUsage,
@@ -480,27 +488,32 @@ pub struct Analyzer {
     cm: Lrc<SourceMap>,
     handler: Handler,
 
-    exports: HashMap<String, ModuleExports>,
+    resolver: Box<dyn Resolve>,
+
+    exports: HashMap<FileName, ModuleExports>,
 }
 
 impl Analyzer {
-    pub fn new() -> Self {
+    pub fn new(resolver: Box<dyn Resolve>) -> Self {
         let cm: Lrc<SourceMap> = Default::default();
         Self {
             import_usage: ImportUsage::new(),
             handler: Handler::with_tty_emitter(ColorConfig::Auto, true, false, Some(cm.clone())),
             exports: HashMap::new(),
+            resolver,
             cm,
         }
     }
 
     pub fn add_file(&mut self, file_path: &Path) {
         // Parse the file into an AST
+        println!("loading file {:?}", file_path);
         let fm = self.cm.load_file(file_path).expect("failed to load file");
 
         // Create a visitor to traverse the ASTs and record imported and exported symbols
         let mut visitor = FileAnalyzer::new(
             file_path.to_str().unwrap().to_owned(),
+            &mut self.resolver,
             &mut self.import_usage,
         );
 
@@ -534,8 +547,9 @@ impl Analyzer {
         // Traverse the AST and record imported and exported symbols
         module.visit_with(&mut visitor);
 
+        println!("done with {:?}", visitor.filename);
         self.exports.insert(
-            visitor.filename,
+            FileName::Real(visitor.filename.into()),
             ModuleExports {
                 exports: visitor.exports,
                 has_default_export: false,
@@ -552,11 +566,10 @@ impl Analyzer {
                 unused_symbols: HashSet::new(),
             };
             //println!("State: {:?}", self.import_usage);
-            let file_atom = &file.clone().into();
             /*if exports.has_default_export {
                 module_results.unused_default_export = self.import_usage.default_imports.contains(file_atom);
             }*/
-            let imports = self.import_usage.imports.get(file_atom);
+            let imports = self.import_usage.imports.get(&file);
             for (exported_name, original_name) in exports.exports {
                 //if !imports.is_some_and(|v| v.contains(&exported_name)) {
                 let used = match imports {
@@ -578,11 +591,18 @@ impl Analyzer {
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use swc_ecma_loader::resolvers::node::NodeModulesResolver;
+    use swc_ecma_loader::TargetEnv;
 
     fn analyze(filepaths: Vec<&str>) -> AnalysisResults {
-        let mut analyzer = Analyzer::new();
-        for path in filepaths {
-            analyzer.add_file(Path::new(path));
+        let mut analyzer = Analyzer::new(Box::new(NodeModulesResolver::new(
+            TargetEnv::Node,
+            Default::default(),
+            false,
+        )));
+        for filepath in filepaths {
+            let path = canonicalize(filepath).unwrap();
+            analyzer.add_file(Path::new(&path));
         }
         analyzer.finalize()
     }
