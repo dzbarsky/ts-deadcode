@@ -1,13 +1,16 @@
 use std::fs::{self, DirEntry};
 use std::io;
 use std::path::Path;
+use swc_common::{
+    FileName
+};
 use swc_ecma_loader::{
     resolvers::{/*lru::CachingResolver, */ node::NodeModulesResolver, tsc::TsConfigResolver},
     TargetEnv,
 };
 use tsconfig::TsConfig;
 
-use ts_deadcode::Analyzer;
+use ts_deadcode::{Analyzer, ModuleResults};
 
 fn visit_dirs(dir: &Path, cb: &mut dyn for<'a> FnMut(&'a DirEntry)) -> io::Result<()> {
     if dir.is_dir() {
@@ -81,14 +84,21 @@ fn main() {
                 analyzer.add_file(&file_path);
             }
         }
-    }).expect("should not fail");
+    })
+    .expect("should not fail");
 
     let mut count = 0;
 
-    for (file, results) in analyzer.finalize() {
-        let c = results.unused_symbols.len();
-        println!("{:?}: {:?}, {:?}", file, c, results.unused_symbols);
-        count += c;
+    let results = analyzer.finalize();
+    let mut files: Vec<(&FileName, &ModuleResults)> = results.iter().collect();
+    files.sort_by_key(|(k, _)| *k);
+    for (file, module_results) in files {
+        let c = module_results.unused_exports.len();
+        // Ignore type exports
+        if c > 0 {
+            println!("{:?}: {:?}, {:?}", file, c, module_results.unused_exports);
+            count += c;
+        }
     }
     println!("TOTAL RESULTS: {}", count);
 }

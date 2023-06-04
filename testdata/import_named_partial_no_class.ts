@@ -5,4 +5,4 @@ import {
   Interface,
   Type,
   Enum,
-} from './export_named';
+} from 'testdata/export_named.ts';

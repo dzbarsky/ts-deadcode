@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-
 use std::path::{Path, PathBuf};
 
 use swc_atoms::JsWord;
@@ -19,21 +18,14 @@ use swc_ecma_visit::VisitWith;
 pub struct ImportUsage {
     // Filename -> symbols
     imports: HashMap<FileName, HashSet<JsWord>>,
-    // Filenames that have default imports used;
-    //default_imports: HashSet<JsWord>,
 }
 
 impl ImportUsage {
     fn new() -> Self {
         Self {
             imports: HashMap::new(),
-            //default_imports: HashSet::new(),
         }
     }
-
-    /*fn record_default_import(&mut self, path: JsWord) {
-        self.default_imports.insert(path);
-    }*/
 }
 
 fn export_name_atom(export: &ModuleExportName) -> JsWord {
@@ -47,7 +39,7 @@ pub struct FileAnalyzer<'a> {
     filename: String,
     // exported_name -> original_name
     exports: HashMap<JsWord, JsWord>,
-    //has_default_export: bool,
+    type_exports: HashMap<JsWord, JsWord>,
     import_usage: &'a mut ImportUsage,
     // local name -> file
     namespace_imports: HashMap<JsWord, JsWord>,
@@ -59,8 +51,8 @@ impl<'a> FileAnalyzer<'a> {
     fn new(filename: String, resolver: &'a dyn Resolve, import_usage: &'a mut ImportUsage) -> Self {
         Self {
             filename,
-            //has_default_export: false,
             exports: HashMap::new(),
+            type_exports: HashMap::new(),
             namespace_imports: HashMap::new(),
             import_usage,
             resolver,
@@ -87,6 +79,11 @@ impl<'a> FileAnalyzer<'a> {
 
     fn record_export(&mut self, exported_name: &JsWord, original_name: &JsWord) {
         self.exports
+            .insert(exported_name.clone(), original_name.clone());
+    }
+
+    fn record_type_export(&mut self, exported_name: &JsWord, original_name: &JsWord) {
+        self.type_exports
             .insert(exported_name.clone(), original_name.clone());
     }
 
@@ -260,12 +257,12 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 }
                 Decl::TsInterface(interface) => {
                     let atom = &interface.id.sym;
-                    self.record_export(atom, atom);
+                    self.record_type_export(atom, atom);
                     //println!("{}: interface decl {:?}", self.filename, atom);
                 }
                 Decl::TsTypeAlias(alias) => {
                     let atom = &alias.id.sym;
-                    self.record_export(atom, atom);
+                    self.record_type_export(atom, atom);
                     //println!("{}: type decl {:?}", self.filename, atom);
                 }
                 Decl::TsEnum(ts_enum) => {
@@ -481,13 +478,13 @@ impl<'a> Visit for FileAnalyzer<'a> {
 pub struct ModuleExports {
     // exported_name -> original_name
     exports: HashMap<JsWord, JsWord>,
-    has_default_export: bool,
+    type_exports: HashMap<JsWord, JsWord>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq)]
 pub struct ModuleResults {
-    pub unused_default_export: bool,
-    pub unused_symbols: HashSet<JsWord>,
+    pub unused_exports: HashSet<JsWord>,
+    pub unused_type_exports: HashSet<JsWord>,
 }
 pub type AnalysisResults = HashMap<FileName, ModuleResults>;
 
@@ -561,8 +558,7 @@ impl Analyzer {
             FileName::Real(visitor.filename.into()),
             ModuleExports {
                 exports: visitor.exports,
-                has_default_export: false,
-                //has_default_export: visitor.has_default_export,
+                type_exports: visitor.type_exports,
             },
         );
     }
@@ -571,14 +567,11 @@ impl Analyzer {
         let mut results = AnalysisResults::new();
         for (file, exports) in self.exports {
             let mut module_results = ModuleResults {
-                unused_default_export: false,
-                unused_symbols: HashSet::new(),
+                unused_exports: HashSet::new(),
+                unused_type_exports: HashSet::new(),
             };
-            //println!("State: {:?}", self.import_usage);
-            /*if exports.has_default_export {
-                module_results.unused_default_export = self.import_usage.default_imports.contains(file_atom);
-            }*/
             let imports = self.import_usage.imports.get(&file);
+
             for (exported_name, original_name) in exports.exports {
                 //if !imports.is_some_and(|v| v.contains(&exported_name)) {
                 let used = match imports {
@@ -586,10 +579,22 @@ impl Analyzer {
                     None => false,
                 };
                 if !used {
-                    module_results.unused_symbols.insert(original_name);
+                    module_results.unused_exports.insert(original_name);
                 }
             }
-            if module_results.unused_default_export || !module_results.unused_symbols.is_empty() {
+
+            for (exported_name, original_name) in exports.type_exports {
+                //if !imports.is_some_and(|v| v.contains(&exported_name)) {
+                let used = match imports {
+                    Some(v) => v.contains(&exported_name),
+                    None => false,
+                };
+                if !used {
+                    module_results.unused_type_exports.insert(original_name);
+                }
+            }
+
+            if !module_results.unused_exports.is_empty() || !module_results.unused_type_exports.is_empty() {
                 results.insert(file, module_results);
             }
         }
@@ -600,20 +605,32 @@ impl Analyzer {
 #[cfg(test)]
 mod tests {
     use crate::*;
-    use swc_ecma_loader::resolvers::node::NodeModulesResolver;
-    use swc_ecma_loader::TargetEnv;
+    use anyhow::Error;
+    use std::fs::canonicalize;
+
+    // A hacky dummy resolver since testdata isn't a real setup (no node_modules/package.json, etc)
+    struct Resolver {}
+    impl Resolve for Resolver {
+        fn resolve(
+            &self,
+            base: &FileName,
+            module_specifier: &str
+        ) -> Result<FileName, Error> {
+            Ok(FileName::Real(PathBuf::from(canonicalize(module_specifier).unwrap())))
+        }
+    }
 
     fn analyze(filepaths: Vec<&str>) -> AnalysisResults {
-        let mut analyzer = Analyzer::new(Box::new(NodeModulesResolver::new(
-            TargetEnv::Node,
-            Default::default(),
-            false,
-        )));
+        let mut analyzer = Analyzer::new(Box::new(Resolver{}));
         for filepath in filepaths {
             let path = canonicalize(filepath).unwrap();
             analyzer.add_file(Path::new(&path));
         }
         analyzer.finalize()
+    }
+
+    fn path(filename: &str) -> FileName {
+        FileName::Real(PathBuf::from(canonicalize(filename).unwrap()))
     }
 
     #[test]
@@ -622,10 +639,9 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_named.ts".into(),
+                path("testdata/export_named.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from([
+                    unused_exports: HashSet::from([
                         "Class".into(),
                         "Enum".into(),
                         "Fn".into(),
@@ -633,7 +649,8 @@ mod tests {
                         "Interface".into(),
                         "Const".into(),
                         "Type".into(),
-                    ])
+                    ]),
+                    ..Default::default()
                 }
             )])
         );
@@ -645,18 +662,20 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_decl.ts".into(),
+                path("testdata/export_decl.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from([
+                    unused_exports: HashSet::from([
                         "Class".into(),
                         "Enum".into(),
                         "Fn".into(),
                         "Var".into(),
-                        "Interface".into(),
                         "Const".into(),
+                    ]),
+                    unused_type_exports: HashSet::from([
+                        "Interface".into(),
                         "Type".into(),
-                    ])
+                    ]),
+                    ..Default::default()
                 }
             )])
         );
@@ -671,10 +690,10 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_named.ts".into(),
+                path("testdata/export_named.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from(["Class".into(),])
+                    unused_exports: HashSet::from(["Class".into(),]),
+                    ..Default::default()
                 }
             )])
         );
@@ -696,10 +715,10 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_named_aliased.ts".into(),
+                path("testdata/export_named_aliased.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from([
+                    // TODO(zbarsky): detect that Interface/Type are type exports
+                    unused_exports: HashSet::from([
                         "Class".into(),
                         "Enum".into(),
                         "Fn".into(),
@@ -707,7 +726,8 @@ mod tests {
                         "Interface".into(),
                         "Const".into(),
                         "Type".into(),
-                    ])
+                    ]),
+                    ..Default::default()
                 }
             )])
         );
@@ -722,10 +742,10 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_named_aliased.ts".into(),
+                path("testdata/export_named_aliased.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from(["Enum".into(),])
+                    unused_exports: HashSet::from(["Enum".into(),]),
+                    ..Default::default()
                 }
             )])
         );
@@ -750,10 +770,10 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_named.ts".into(),
+                path("testdata/export_named.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from(["Enum".into(),])
+                    unused_exports: HashSet::from(["Enum".into(),]),
+                    ..Default::default()
                 }
             )])
         );
@@ -768,10 +788,10 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_named.ts".into(),
+                path("testdata/export_named.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from(["Class".into(),])
+                    unused_exports: HashSet::from(["Class".into(),]),
+                    ..Default::default()
                 }
             )])
         );
@@ -786,10 +806,10 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_named.ts".into(),
+                path("testdata/export_named.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from(["Class".into(),])
+                    unused_exports: HashSet::from(["Class".into(),]),
+                    ..Default::default()
                 }
             )])
         );
@@ -807,10 +827,10 @@ mod tests {
         assert_eq!(
             results,
             HashMap::from([(
-                "testdata/export_default_interface.ts".into(),
+                path("testdata/export_default_interface.ts"),
                 ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from(["default".into(),])
+                    unused_exports: HashSet::from(["default".into(),]),
+                    ..Default::default()
                 }
             )])
         );
@@ -827,17 +847,17 @@ mod tests {
             results,
             HashMap::from([
                 (
-                    "testdata/export_foo.ts".into(),
+                    path("testdata/export_foo.ts"),
                     ModuleResults {
-                        unused_default_export: false,
-                        unused_symbols: HashSet::from(["baz".into(),])
+                        unused_exports: HashSet::from(["baz".into(),]),
+                        ..Default::default()
                     }
                 ),
                 (
-                    "testdata/export_bar.ts".into(),
+                    path("testdata/export_bar.ts"),
                     ModuleResults {
-                        unused_default_export: false,
-                        unused_symbols: HashSet::from(["foo".into(),])
+                        unused_exports: HashSet::from(["foo".into(),]),
+                        ..Default::default()
                     }
                 )
             ])
