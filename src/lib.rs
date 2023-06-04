@@ -419,7 +419,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     if ident_expr.sym == *"then" {
                         if let Expr::Call(ref call) = *member_expr.obj {
                             if let Expr::Arrow(ref arrow_expr) = *call_expr.args[0].expr {
-                                if let Pat::Ident(ref ident) = arrow_expr.params[0] {
+                                if let Some(Pat::Ident(ref ident)) = arrow_expr.params.get(0) {
                                     sym = Some(ident.id.sym.clone());
                                     filename = extract_import_call(call);
                                 }
