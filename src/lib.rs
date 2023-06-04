@@ -418,10 +418,13 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 if let MemberProp::Ident(ident_expr) = &member_expr.prop {
                     if ident_expr.sym == *"then" {
                         if let Expr::Call(ref call) = *member_expr.obj {
-                            if let Expr::Arrow(ref arrow_expr) = *call_expr.args[0].expr {
-                                if let Some(Pat::Ident(ref ident)) = arrow_expr.params.get(0) {
-                                    sym = Some(ident.id.sym.clone());
-                                    filename = extract_import_call(call);
+                            println!("call: {:?}", call_expr);
+                            if let Some(ref arg) = call_expr.args.get(0) {
+                                if let Expr::Arrow(ref arrow_expr) = *arg.expr {
+                                    if let Some(Pat::Ident(ref ident)) = arrow_expr.params.get(0) {
+                                        sym = Some(ident.id.sym.clone());
+                                        filename = extract_import_call(call);
+                                    }
                                 }
                             }
                         }
@@ -795,6 +798,17 @@ mod tests {
                     unused_symbols: HashSet::from(["foo".into(),])
                 }
             )])
+        );
+    }
+
+    #[test]
+    fn acid_test() {
+        let results = analyze(vec![
+            "testdata/acid.ts",
+        ]);
+        assert_eq!(
+            results,
+            HashMap::from([]),
         );
     }
 }
