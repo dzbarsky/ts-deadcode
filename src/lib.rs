@@ -80,7 +80,17 @@ impl<'a> FileAnalyzer<'a> {
             match prop {
                 ObjectPatProp::Assign(assign) =>
                     self.import_usage.record_import(file.clone(), assign.key.sym.clone()),
-                _ => panic!("unhandle object prop")
+                ObjectPatProp::KeyValue(kv) => {
+                    match &kv.key {
+                        PropName::Ident(ident) => {
+                            self.import_usage.record_import(file.clone(), ident.sym.clone());
+                        }
+                        _ => {
+                            panic!("unhandle object prop: {:?}", prop);
+                        }
+                    }
+                }
+                _ => panic!("unhandle object prop: {:?}", prop)
             }
         }
     }
@@ -118,7 +128,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                 None => named_specifier.local.sym.clone(),
                             };
 
-                            println!("named import from {:?}: {:?}", import_decl.src, atom);
+                            //println!("named import from {:?}: {:?}", import_decl.src, atom);
                             self.import_usage.record_import(import_decl.src.value.clone(), atom);
                             /*self.record_import(
                                 named_specifier
@@ -128,6 +138,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             );*/
                         }
                         ImportSpecifier::Default(_default_specifier) => {
+                            println!("USING {:?}", import_decl.src.value.clone());
                             self.import_usage.record_import(import_decl.src.value.clone(), "default".into())
                         }
                         ImportSpecifier::Namespace(namespace_specifier) => {
@@ -142,12 +153,12 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 Decl::Class(class) => {
                     let atom = &class.ident.sym;
                     self.record_export(atom, atom);
-                    println!("{}: class decl {:?}", self.filename, atom.clone());
+                    //println!("{}: class decl {:?}", self.filename, atom.clone());
                 }
                 Decl::Fn(func) => {
                     let atom = &func.ident.sym;
                     self.record_export(atom, atom);
-                    println!("{}: func decl {:?}", self.filename, atom.clone());
+                    //println!("{}: func decl {:?}", self.filename, atom.clone());
                 }
                 Decl::Var(var) => {
                     for decl in &var.decls {
@@ -155,7 +166,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             Pat::Ident(ident) => {
                                 let atom = &ident.id.sym;
                                 self.record_export(atom, atom);
-                                println!("{}: var decl {:?}", self.filename, atom);
+                                //println!("{}: var decl {:?}", self.filename, atom);
                             }
                             Pat::Array(array) => {
                                 for elem in &array.elems {
@@ -163,7 +174,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                         Some(Pat::Ident(ident)) => {
                                             let atom = &ident.id.sym;
                                             self.record_export(atom, atom);
-                                            println!("{}: var decl {:?}", self.filename, atom);
+                                            //println!("{}: var decl {:?}", self.filename, atom);
                                         }
                                         _ => panic!("unknown array export pat: {:?}", elem),
                                     }
@@ -176,21 +187,20 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 Decl::TsInterface(interface) => {
                     let atom = &interface.id.sym;
                     self.record_export(atom, atom);
-                    println!("{}: interface decl {:?}", self.filename, atom);
+                    //println!("{}: interface decl {:?}", self.filename, atom);
                 }
                 Decl::TsTypeAlias(alias) => {
                     let atom = &alias.id.sym;
                     self.record_export(atom, atom);
-                    println!("{}: type decl {:?}", self.filename, atom);
+                    //println!("{}: type decl {:?}", self.filename, atom);
                 }
                 Decl::TsEnum(ts_enum) => {
                     let atom = &ts_enum.id.sym;
                     self.record_export(atom, atom);
-                    println!("{}: enum decl {:?}", self.filename, atom);
+                    //println!("{}: enum decl {:?}", self.filename, atom);
                 }
                 _ => {
-                    println!("{}: {:?}", self.filename, export_decl.decl);
-                    panic!("uh oh")
+                    println!("WARNING: unhandled export namespace {}", self.filename);
                 }
             },
             ModuleDecl::ExportNamed(named_export) => {
@@ -203,26 +213,34 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                 None => orig_atom.clone(),
                             };
                             self.record_export(&exported_atom, &orig_atom);
-                            println!("{}: {:?} as {:?}", self.filename, orig_atom, exported_atom);
+                            //println!("{}: {:?} as {:?}", self.filename, orig_atom, exported_atom);
                             //self.record_export(named_specifier.orig.sym.clone());
                         }
                         ExportSpecifier::Namespace(namespace_specifier) => {
                             let atom = export_name_atom(&namespace_specifier.name);
                             self.record_export(&atom, &atom);
-                            println!("{}: namespace {:?}", self.filename, atom);
+                            //println!("{}: namespace {:?}", self.filename, atom);
                             //self.record_export(namespace_specifier.name.sym.clone());
                         }
                         ExportSpecifier::Default(default_specifier) => {
                             self.record_export(&"default".into(), &"default".into());
                             //self.record_default_export();
-                            println!("{}: default {:?}", self.filename, default_specifier);
+                            //println!("{}: default {:?}", self.filename, default_specifier);
                             //self.record_export(default_specifier.exported.sym.clone());
                         }
                     }
                 }
             }
             ModuleDecl::ExportAll(_export_all) => {}
-            _ => {}
+            ModuleDecl::ExportDefaultDecl(export_default_decl) => {
+                self.record_export(&"default".into(), &"default".into())
+            }
+            ModuleDecl::ExportDefaultExpr(export_default_decl) => {
+                self.record_export(&"default".into(), &"default".into())
+            }
+            _ => {
+                println!("WARNING: unhandled ModuleDecl {:?}", decl);
+            }
         }
         decl.visit_children_with(self);
     }
@@ -282,7 +300,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     match &member_expr.prop {
                         MemberProp::Ident(ident) =>
                             self.import_usage.record_import(file.clone(), ident.sym.clone()),
-                        _ => panic!("unhandled"),
+                        _ => println!("WARNING: unhandled MemberExpr: {:?}", member_expr),
                     }
                 }
             }
@@ -356,6 +374,7 @@ impl Analyzer {
             // We want to parse ecmascript
             Syntax::Typescript(TsConfig{
 		tsx: true,
+                decorators: true,
                 ..Default::default()
             }),
             // EsVersion defaults to es5
@@ -564,6 +583,25 @@ mod tests {
                 unused_default_export: false,
                 unused_symbols: HashSet::from([
                     "Class".into(),
+                ])
+            }
+        )]));
+    }
+
+    #[test]
+    fn import_defaults() {
+        let results = analyze(vec![
+            "testdata/export_default_class.ts",
+            "testdata/export_default_interface.ts",
+            "testdata/export_default_function.ts",
+            "testdata/export_default_object.ts",
+            "testdata/import_defaults.ts",
+        ]);
+        assert_eq!(results, HashMap::from([(
+            "testdata/export_default_interface.ts".into(), ModuleResults{
+                unused_default_export: false,
+                unused_symbols: HashSet::from([
+                    "default".into(),
                 ])
             }
         )]));
