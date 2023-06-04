@@ -205,75 +205,94 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     }
                 }
             }
-            ModuleDecl::ExportDecl(export_decl) => match &export_decl.decl {
-                Decl::Class(class) => {
-                    let atom = &class.ident.sym;
-                    self.record_export(atom, atom);
-                    //println!("{}: class decl {:?}", self.filename, atom.clone());
-                }
-                Decl::Fn(func) => {
-                    let atom = &func.ident.sym;
-                    self.record_export(atom, atom);
-                    //println!("{}: func decl {:?}", self.filename, atom.clone());
-                }
-                Decl::Var(var) => {
-                    for decl in &var.decls {
-                        match &decl.name {
-                            Pat::Ident(ident) => {
-                                let atom = &ident.id.sym;
-                                self.record_export(atom, atom);
-                                //println!("{}: var decl {:?}", self.filename, atom);
-                            }
-                            /*
-                             * Handle
-                             * export const [Const, Var] = ["1", "2"];
-                             */
-                            Pat::Array(array) => {
-                                for elem in &array.elems {
-                                    match elem {
-                                        Some(Pat::Ident(ident)) => {
-                                            let atom = &ident.id.sym;
-                                            self.record_export(atom, atom);
-                                            //println!("{}: var decl {:?}", self.filename, atom);
+            ModuleDecl::ExportDecl(export_decl) => {
+                match &export_decl.decl {
+                    Decl::Class(class) => {
+                        let atom = &class.ident.sym;
+                        self.record_export(atom, atom);
+                        //println!("{}: class decl {:?}", self.filename, atom.clone());
+                    }
+                    Decl::Fn(func) => {
+                        let atom = &func.ident.sym;
+                        self.record_export(atom, atom);
+                        //println!("{}: func decl {:?}", self.filename, atom.clone());
+                    }
+                    Decl::Var(var) => {
+                        for decl in &var.decls {
+                            match &decl.name {
+                                Pat::Ident(ident) => {
+                                    let atom = &ident.id.sym;
+                                    self.record_export(atom, atom);
+                                    //println!("{}: var decl {:?}", self.filename, atom);
+                                }
+                                /*
+                                 * Handle
+                                 * export const [Const, Var] = ["1", "2"];
+                                 */
+                                Pat::Array(array) => {
+                                    for elem in &array.elems {
+                                        match elem {
+                                            Some(Pat::Ident(ident)) => {
+                                                let atom = &ident.id.sym;
+                                                self.record_export(atom, atom);
+                                                //println!("{}: var decl {:?}", self.filename, atom);
+                                            }
+                                            _ => panic!(
+                                                "{}: unknown array export pat: {:?}",
+                                                self.filename, elem
+                                            ),
                                         }
-                                        _ => panic!("unknown array export pat: {:?}", elem),
                                     }
                                 }
-                            }
-                            Pat::Object(object) => {
-                                for prop in &object.props {
-                                    match prop {
+                                Pat::Object(object) => {
+                                    for prop in &object.props {
+                                        match prop {
                                         ObjectPatProp::Assign(assign_prop) => {
                                             let atom = &assign_prop.key.sym;
                                             self.record_export(atom, atom);
                                         }
-                                        _ => panic!("unknown object export pat: {:?}", prop),
+                                        ObjectPatProp::KeyValue(kv_pat_prop) => {
+                                            match &kv_pat_prop.key {
+                                                PropName::Ident(ident) => {
+                                                    if let Pat::Ident(binding_ident) = &*kv_pat_prop.value {
+                                                        self.record_export(&ident.sym, &binding_ident.id.sym);
+                                                    } else {
+                                                        panic!("{}: unknown object export kv_pat_prop: {:?}", self.filename, kv_pat_prop);
+                                                    }
+                                                }
+                                                _ => panic!("{}: unknown object export kv_pat_prop: {:?}", self.filename, kv_pat_prop),
+                                            }
+                                        }
+                                        _ => panic!("{}: unknown object export pat: {:?}", self.filename, prop),
+                                    }
                                     }
                                 }
+                                _ => {
+                                    panic!("{}: unknown decl.name: {:?}", self.filename, decl.name)
+                                }
                             }
-                            _ => panic!("unknown decl.name: {:?}", decl.name),
                         }
                     }
+                    Decl::TsInterface(interface) => {
+                        let atom = &interface.id.sym;
+                        self.record_type_export(atom, atom);
+                        //println!("{}: interface decl {:?}", self.filename, atom);
+                    }
+                    Decl::TsTypeAlias(alias) => {
+                        let atom = &alias.id.sym;
+                        self.record_type_export(atom, atom);
+                        //println!("{}: type decl {:?}", self.filename, atom);
+                    }
+                    Decl::TsEnum(ts_enum) => {
+                        let atom = &ts_enum.id.sym;
+                        self.record_export(atom, atom);
+                        //println!("{}: enum decl {:?}", self.filename, atom);
+                    }
+                    _ => {
+                        println!("WARNING: {}: unhandled export namespace", self.filename);
+                    }
                 }
-                Decl::TsInterface(interface) => {
-                    let atom = &interface.id.sym;
-                    self.record_type_export(atom, atom);
-                    //println!("{}: interface decl {:?}", self.filename, atom);
-                }
-                Decl::TsTypeAlias(alias) => {
-                    let atom = &alias.id.sym;
-                    self.record_type_export(atom, atom);
-                    //println!("{}: type decl {:?}", self.filename, atom);
-                }
-                Decl::TsEnum(ts_enum) => {
-                    let atom = &ts_enum.id.sym;
-                    self.record_export(atom, atom);
-                    //println!("{}: enum decl {:?}", self.filename, atom);
-                }
-                _ => {
-                    println!("WARNING: {}: unhandled export namespace", self.filename);
-                }
-            },
+            }
             ModuleDecl::ExportNamed(named_export) => {
                 for specifier in &named_export.specifiers {
                     match specifier {
@@ -594,7 +613,9 @@ impl Analyzer {
                 }
             }
 
-            if !module_results.unused_exports.is_empty() || !module_results.unused_type_exports.is_empty() {
+            if !module_results.unused_exports.is_empty()
+                || !module_results.unused_type_exports.is_empty()
+            {
                 results.insert(file, module_results);
             }
         }
@@ -611,17 +632,15 @@ mod tests {
     // A hacky dummy resolver since testdata isn't a real setup (no node_modules/package.json, etc)
     struct Resolver {}
     impl Resolve for Resolver {
-        fn resolve(
-            &self,
-            base: &FileName,
-            module_specifier: &str
-        ) -> Result<FileName, Error> {
-            Ok(FileName::Real(PathBuf::from(canonicalize(module_specifier).unwrap())))
+        fn resolve(&self, base: &FileName, module_specifier: &str) -> Result<FileName, Error> {
+            Ok(FileName::Real(PathBuf::from(
+                canonicalize(module_specifier).unwrap(),
+            )))
         }
     }
 
     fn analyze(filepaths: Vec<&str>) -> AnalysisResults {
-        let mut analyzer = Analyzer::new(Box::new(Resolver{}));
+        let mut analyzer = Analyzer::new(Box::new(Resolver {}));
         for filepath in filepaths {
             let path = canonicalize(filepath).unwrap();
             analyzer.add_file(Path::new(&path));
@@ -671,10 +690,7 @@ mod tests {
                         "Var".into(),
                         "Const".into(),
                     ]),
-                    unused_type_exports: HashSet::from([
-                        "Interface".into(),
-                        "Type".into(),
-                    ]),
+                    unused_type_exports: HashSet::from(["Interface".into(), "Type".into(),]),
                     ..Default::default()
                 }
             )])

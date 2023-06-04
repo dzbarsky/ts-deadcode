@@ -1,9 +1,7 @@
-use std::fs::{self, DirEntry};
+use std::fs::{self, read_to_string, DirEntry};
 use std::io;
 use std::path::Path;
-use swc_common::{
-    FileName
-};
+use swc_common::FileName;
 use swc_ecma_loader::{
     resolvers::{/*lru::CachingResolver, */ node::NodeModulesResolver, tsc::TsConfigResolver},
     TargetEnv,
@@ -93,11 +91,25 @@ fn main() {
     let mut files: Vec<(&FileName, &ModuleResults)> = results.iter().collect();
     files.sort_by_key(|(k, _)| *k);
     for (file, module_results) in files {
-        let c = module_results.unused_exports.len();
         // Ignore type exports
-        if c > 0 {
-            println!("{:?}: {:?}, {:?}", file, c, module_results.unused_exports);
-            count += c;
+        let c = module_results.unused_exports.len();
+        if c == 0 {
+            continue;
+        }
+
+        if let FileName::Real(file) = file {
+            let contents = read_to_string(file).expect("should read file");
+            for export in &module_results.unused_exports {
+                let export = export.to_string();
+                let first_usage = contents.find(&export).unwrap();
+                match contents[first_usage + 1..].find(&export) {
+                    None => {
+                        println!("{:?}: {:?}", file, export);
+                        count += 1;
+                    }
+                    _ => println!("{:?}: {:?} [USED IN FILE]", file, export),
+                }
+            }
         }
     }
     println!("TOTAL RESULTS: {}", count);
