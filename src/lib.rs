@@ -112,12 +112,29 @@ impl<'a> FileAnalyzer<'a> {
             }
         }
     }
+
+    // Record usage of:
+    //   (await import('testdata/export_named.ts')).Interface;
+    fn handle_potential_import_call_member_expr(
+        &mut self,
+        call: &CallExpr,
+        member_expr: &MemberExpr,
+    ) {
+        if let Some(filename) = extract_import_call(call) {
+            match &member_expr.prop {
+                MemberProp::Ident(ident) => {
+                    self.import_usage.record_import(filename, ident.sym.clone())
+                }
+                _ => panic!("unhandled"),
+            }
+        }
+    }
 }
 
 fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
     match &call.callee {
         Callee::Super(_) => {}
-        Callee::Import(_import) => panic!("unhandled import"),
+        Callee::Import(import) => panic!("unhandled import"),
         // Handle `require('filename')`
         Callee::Expr(expr) => {
             if let Expr::Ident(ref ident) = **expr {
@@ -129,6 +146,19 @@ fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
                 }
             }
         }
+    }
+    None
+}
+
+fn extract_import_call(call: &CallExpr) -> Option<JsWord> {
+    match &call.callee {
+        Callee::Super(_) => {}
+        Callee::Import(import) =>
+            match *call.args[0].expr {
+                Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
+                _ => println!("WARNING: unhandled non-literal require"),
+            }
+        Callee::Expr(expr) => {}
     }
     None
 }
@@ -345,18 +375,26 @@ impl<'a> Visit for FileAnalyzer<'a> {
             // require('testdata/export_named.ts').Interface
             // require('testdata/export_named.ts').default
             Expr::Call(ref call) => {
+                println!("MEMBER EXPR: {:?}", member_expr);
                 self.handle_potential_require_call_member_expr(call, member_expr)
             }
-            // (require('testdata/export_named.ts') as import('testdata/export_named.ts')).Interface
+            // TODO(zbarsky): would be nice to have box_deref_patterns
             Expr::Paren(ref paren_expr) => {
-                // TODO(zbarsky): would be nice to have box_deref_patterns
                 match *paren_expr.expr {
+                    // (require('testdata/export_named.ts') as import('testdata/export_named.ts')).Interface
                     Expr::TsAs(ref as_expr) => match *as_expr.expr {
                         Expr::Call(ref call) => {
                             self.handle_potential_require_call_member_expr(call, member_expr)
                         }
                         _ => {}
                     },
+                    // (await import('testdata/export_named.ts')).Interface;
+                    Expr::Await(ref await_expr) => match *await_expr.arg {
+                        Expr::Call(ref call) => {
+                            self.handle_potential_import_call_member_expr(call, member_expr)
+                        }
+                        _ => {}
+                    }
                     _ => {}
                 }
             }
@@ -645,6 +683,24 @@ mod tests {
         let results = analyze(vec![
             "testdata/export_named.ts",
             "testdata/require_named.ts",
+        ]);
+        assert_eq!(
+            results,
+            HashMap::from([(
+                "testdata/export_named.ts".into(),
+                ModuleResults {
+                    unused_default_export: false,
+                    unused_symbols: HashSet::from(["Class".into(),])
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn async_import_named() {
+        let results = analyze(vec![
+            "testdata/export_named.ts",
+            "testdata/async_import_named.ts",
         ]);
         assert_eq!(
             results,
