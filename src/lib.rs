@@ -233,6 +233,17 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                     }
                                 }
                             }
+                            Pat::Object(object) => {
+                                for prop in &object.props {
+                                    match prop {
+                                        ObjectPatProp::Assign(assign_prop) => {
+                                            let atom = &assign_prop.key.sym;
+                                            self.record_export(atom, atom);
+                                        }
+                                        _ => panic!("unknown object export pat: {:?}", prop),
+                                    }
+                                }
+                            }
                             _ => panic!("unknown decl.name: {:?}", decl.name),
                         }
                     }
@@ -418,7 +429,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 if let MemberProp::Ident(ident_expr) = &member_expr.prop {
                     if ident_expr.sym == *"then" {
                         if let Expr::Call(ref call) = *member_expr.obj {
-                            println!("call: {:?}", call_expr);
+                            //println!("call: {:?}", call_expr);
                             if let Some(ref arg) = call_expr.args.get(0) {
                                 if let Expr::Arrow(ref arrow_expr) = *arg.expr {
                                     if let Some(Pat::Ident(ref ident)) = arrow_expr.params.get(0) {
