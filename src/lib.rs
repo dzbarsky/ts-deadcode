@@ -1,20 +1,19 @@
 use std::collections::{HashMap, HashSet};
 
+
 use std::path::{Path, PathBuf};
-use std::fs::canonicalize;
 
 use swc_atoms::JsWord;
 use swc_common::{
-    FileName,
     errors::{ColorConfig, Handler},
     sync::Lrc,
-    SourceMap,
+    FileName, SourceMap,
 };
 use swc_ecma_ast::*;
+use swc_ecma_loader::resolve::Resolve;
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
 use swc_ecma_visit::Visit;
 use swc_ecma_visit::VisitWith;
-use swc_ecma_loader::resolve::Resolve;
 
 #[derive(Debug)]
 pub struct ImportUsage {
@@ -68,15 +67,21 @@ impl<'a> FileAnalyzer<'a> {
         }
     }
 
-    
     fn record_import(&mut self, path: &JsWord, symbol: JsWord) {
-        match self.resolver.resolve(&FileName::Real(PathBuf::from(self.filename.clone())), path) {
-          Ok(filename) => {
-            self.import_usage.imports.entry(filename).or_default().insert(symbol);
-          }
-          Err(err) => {
-            println!("ERRRR {:?} {:?}", path, err);
-          }
+        match self
+            .resolver
+            .resolve(&FileName::Real(PathBuf::from(self.filename.clone())), path)
+        {
+            Ok(filename) => {
+                self.import_usage
+                    .imports
+                    .entry(filename)
+                    .or_default()
+                    .insert(symbol);
+            }
+            Err(err) => {
+                println!("ERRRR {:?} {:?}", path, err);
+            }
         }
     }
 
@@ -89,8 +94,7 @@ impl<'a> FileAnalyzer<'a> {
     fn record_destructured_import(&mut self, file: JsWord, object: &ObjectPat) {
         for prop in &object.props {
             match prop {
-                ObjectPatProp::Assign(assign) => self
-                    .record_import(&file, assign.key.sym.clone()),
+                ObjectPatProp::Assign(assign) => self.record_import(&file, assign.key.sym.clone()),
                 ObjectPatProp::KeyValue(kv) => match &kv.key {
                     PropName::Ident(ident) => {
                         self.record_import(&file, ident.sym.clone());
@@ -111,11 +115,9 @@ impl<'a> FileAnalyzer<'a> {
         call: &CallExpr,
         member_expr: &MemberExpr,
     ) {
-        if let Some(filename) = extract_require_call(call) {
+        if let Some(filename) = self.extract_require_call(call) {
             match &member_expr.prop {
-                MemberProp::Ident(ident) => {
-                    self.record_import(&filename, ident.sym.clone())
-                }
+                MemberProp::Ident(ident) => self.record_import(&filename, ident.sym.clone()),
                 _ => panic!("unhandled"),
             }
         }
@@ -128,46 +130,47 @@ impl<'a> FileAnalyzer<'a> {
         call: &CallExpr,
         member_expr: &MemberExpr,
     ) {
-        if let Some(filename) = extract_import_call(call) {
+        if let Some(filename) = self.extract_import_call(call) {
             match &member_expr.prop {
-                MemberProp::Ident(ident) => {
-                    self.record_import(&filename, ident.sym.clone())
-                }
+                MemberProp::Ident(ident) => self.record_import(&filename, ident.sym.clone()),
                 _ => panic!("unhandled"),
             }
         }
     }
-}
 
-fn extract_require_call(call: &CallExpr) -> Option<JsWord> {
-    match &call.callee {
-        Callee::Super(_) => {}
-        Callee::Import(_import) => {}
-        // Handle `require('filename')`
-        Callee::Expr(expr) => {
-            if let Expr::Ident(ref ident) = **expr {
-                if ident.sym == *"require" {
-                    match *call.args[0].expr {
-                        Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
-                        _ => println!("WARNING: unhandled non-literal require"),
+    fn extract_require_call(&self, call: &CallExpr) -> Option<JsWord> {
+        match &call.callee {
+            Callee::Super(_) => {}
+            Callee::Import(_import) => {}
+            // Handle `require('filename')`
+            Callee::Expr(expr) => {
+                if let Expr::Ident(ref ident) = **expr {
+                    if ident.sym == *"require" {
+                        match *call.args[0].expr {
+                            Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
+                            _ => println!(
+                                "WARNING: {}: unhandled non-literal require",
+                                self.filename
+                            ),
+                        }
                     }
                 }
             }
         }
+        None
     }
-    None
-}
 
-fn extract_import_call(call: &CallExpr) -> Option<JsWord> {
-    match &call.callee {
-        Callee::Super(_) => {}
-        Callee::Import(_import) => match *call.args[0].expr {
-            Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
-            _ => println!("WARNING: unhandled non-literal require"),
-        },
-        Callee::Expr(_expr) => {}
+    fn extract_import_call(&self, call: &CallExpr) -> Option<JsWord> {
+        match &call.callee {
+            Callee::Super(_) => {}
+            Callee::Import(_import) => match *call.args[0].expr {
+                Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
+                _ => println!("WARNING: {}: unhandled non-literal require", self.filename),
+            },
+            Callee::Expr(_expr) => {}
+        }
+        None
     }
-    None
 }
 
 impl<'a> Visit for FileAnalyzer<'a> {
@@ -271,7 +274,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     //println!("{}: enum decl {:?}", self.filename, atom);
                 }
                 _ => {
-                    println!("WARNING: unhandled export namespace {}", self.filename);
+                    println!("WARNING: {}: unhandled export namespace", self.filename);
                 }
             },
             ModuleDecl::ExportNamed(named_export) => {
@@ -310,7 +313,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
                 self.record_export(&"default".into(), &"default".into())
             }
             _ => {
-                println!("WARNING: unhandled ModuleDecl {:?}", decl);
+                println!(
+                    "WARNING: {}: unhandled ModuleDecl {:?}",
+                    self.filename, decl
+                );
             }
         }
         decl.visit_children_with(self);
@@ -339,15 +345,15 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     }
                 }
                 // const named = require('testdata/export_named.ts');
-                Expr::Call(ref call) => extract_require_call(call),
+                Expr::Call(ref call) => self.extract_require_call(call),
                 // const named = require('testdata/export_named.ts') as typeof import('testdata/export_named.ts');
                 Expr::TsAs(ref as_expr) => match *as_expr.expr {
-                    Expr::Call(ref call) => extract_require_call(call),
+                    Expr::Call(ref call) => self.extract_require_call(call),
                     _ => None,
                 },
                 // const named = await import('testdata/export_named.ts');
                 Expr::Await(ref await_expr) => match *await_expr.arg {
-                    Expr::Call(ref call) => extract_import_call(call),
+                    Expr::Call(ref call) => self.extract_import_call(call),
                     _ => None,
                 },
                 _ => None,
@@ -389,7 +395,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             let file = file.clone();
                             self.record_import(&file, ident.sym.clone());
                         }
-                        _ => println!("WARNING: unhandled MemberExpr: {:?}", member_expr),
+                        _ => println!(
+                            "WARNING: {}: unhandled MemberExpr: {:?}",
+                            self.filename, member_expr
+                        ),
                     }
                 }
             }
@@ -438,11 +447,11 @@ impl<'a> Visit for FileAnalyzer<'a> {
                     if ident_expr.sym == *"then" {
                         if let Expr::Call(ref call) = *member_expr.obj {
                             //println!("call: {:?}", call_expr);
-                            if let Some(ref arg) = call_expr.args.get(0) {
+                            if let Some(arg) = call_expr.args.get(0) {
                                 if let Expr::Arrow(ref arrow_expr) = *arg.expr {
                                     if let Some(Pat::Ident(ref ident)) = arrow_expr.params.get(0) {
                                         sym = Some(ident.id.sym.clone());
-                                        filename = extract_import_call(call);
+                                        filename = self.extract_import_call(call);
                                     }
                                 }
                             }
@@ -507,13 +516,13 @@ impl Analyzer {
 
     pub fn add_file(&mut self, file_path: &Path) {
         // Parse the file into an AST
-        println!("loading file {:?}", file_path);
+        //println!("loading file {:?}", file_path);
         let fm = self.cm.load_file(file_path).expect("failed to load file");
 
         // Create a visitor to traverse the ASTs and record imported and exported symbols
         let mut visitor = FileAnalyzer::new(
             file_path.to_str().unwrap().to_owned(),
-            &mut self.resolver,
+            &self.resolver,
             &mut self.import_usage,
         );
 
@@ -547,7 +556,7 @@ impl Analyzer {
         // Traverse the AST and record imported and exported symbols
         module.visit_with(&mut visitor);
 
-        println!("done with {:?}", visitor.filename);
+        //println!("done with {:?}", visitor.filename);
         self.exports.insert(
             FileName::Real(visitor.filename.into()),
             ModuleExports {
@@ -816,30 +825,28 @@ mod tests {
         ]);
         assert_eq!(
             results,
-            HashMap::from([(
-                "testdata/export_foo.ts".into(),
-                ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from(["baz".into(),])
-                }
-            ),(
-                "testdata/export_bar.ts".into(),
-                ModuleResults {
-                    unused_default_export: false,
-                    unused_symbols: HashSet::from(["foo".into(),])
-                }
-            )])
+            HashMap::from([
+                (
+                    "testdata/export_foo.ts".into(),
+                    ModuleResults {
+                        unused_default_export: false,
+                        unused_symbols: HashSet::from(["baz".into(),])
+                    }
+                ),
+                (
+                    "testdata/export_bar.ts".into(),
+                    ModuleResults {
+                        unused_default_export: false,
+                        unused_symbols: HashSet::from(["foo".into(),])
+                    }
+                )
+            ])
         );
     }
 
     #[test]
     fn acid_test() {
-        let results = analyze(vec![
-            "testdata/acid.ts",
-        ]);
-        assert_eq!(
-            results,
-            HashMap::from([]),
-        );
+        let results = analyze(vec!["testdata/acid.ts"]);
+        assert_eq!(results, HashMap::from([]),);
     }
 }
