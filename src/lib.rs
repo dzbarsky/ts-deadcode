@@ -272,18 +272,29 @@ impl<'a> Visit for FileAnalyzer<'a> {
         }
 
         if let Some(ref init) = var.init {
-            if let Expr::Call(ref call) = **init {
-                if let Some(filename) = extract_require_call(call) {
-                    match &var.name {
-                        // const named = require('testdata/export_named.ts');
-                        Pat::Ident(binding) => {
-                            self.namespace_imports.insert(binding.id.sym.clone(), filename);
-                        }
-                        // const {Enum, Fn} = require('testdata/export_named.ts');
-                        Pat::Object(object) =>
-                            self.record_destructured_import(filename, object),
-                        _ => todo!("fuck")
+            let filename = match **init {
+                // const named = require('testdata/export_named.ts');
+                Expr::Call(ref call) => extract_require_call(call),
+                // const named = require('testdata/export_named.ts') as typeof import('testdata/export_named.ts');
+                Expr::TsAs(ref as_expr) => {
+                    match *as_expr.expr {
+                        Expr::Call(ref call) => extract_require_call(call),
+                        _ => None,
                     }
+                }
+                _ => None,
+            };
+
+            if let Some(filename) = filename {
+                match &var.name {
+                    // const named = require('testdata/export_named.ts');
+                    Pat::Ident(binding) => {
+                        self.namespace_imports.insert(binding.id.sym.clone(), filename);
+                    }
+                    // const {Enum, Fn} = require('testdata/export_named.ts');
+                    Pat::Object(object) =>
+                        self.record_destructured_import(filename, object),
+                    _ => todo!("fuck")
                 }
             }
         }
