@@ -76,7 +76,7 @@ fn main() {
         //println!("entry {:?}", entry);
         if !file_path.to_str().unwrap().ends_with(".d.ts") {
             let ext = file_path.extension().unwrap_or_default();
-            if ext == "ts" || ext == "tsx" {
+            if ext == "ts" || ext == "tsx" || ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs" {
                 // Parse the file into an AST
                 // println!("analyzing file {:?}", file_path);
                 analyzer.add_file(&file_path);
