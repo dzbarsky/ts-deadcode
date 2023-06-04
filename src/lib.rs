@@ -138,7 +138,7 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             );*/
                         }
                         ImportSpecifier::Default(_default_specifier) => {
-                            println!("USING {:?}", import_decl.src.value.clone());
+                            //println!("USING {:?}", import_decl.src.value.clone());
                             self.import_usage.record_import(import_decl.src.value.clone(), "default".into())
                         }
                         ImportSpecifier::Namespace(namespace_specifier) => {
@@ -168,6 +168,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                 self.record_export(atom, atom);
                                 //println!("{}: var decl {:?}", self.filename, atom);
                             }
+                            /*
+                             * Handle
+                             * export const [Const, Var] = ["1", "2"];
+                             */
                             Pat::Array(array) => {
                                 for elem in &array.elems {
                                     match elem {
