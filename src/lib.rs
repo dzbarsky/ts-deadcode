@@ -469,8 +469,8 @@ pub struct ModuleExports {
 
 #[derive(Debug, PartialEq)]
 pub struct ModuleResults {
-    unused_default_export: bool,
-    unused_symbols: HashSet<JsWord>,
+    pub unused_default_export: bool,
+    pub unused_symbols: HashSet<JsWord>,
 }
 pub type AnalysisResults = HashMap<String, ModuleResults>;
 
@@ -551,7 +551,7 @@ impl Analyzer {
                 unused_default_export: false,
                 unused_symbols: HashSet::new(),
             };
-            println!("State: {:?}", self.import_usage);
+            //println!("State: {:?}", self.import_usage);
             let file_atom = &file.clone().into();
             /*if exports.has_default_export {
                 module_results.unused_default_export = self.import_usage.default_imports.contains(file_atom);

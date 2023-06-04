@@ -38,7 +38,12 @@ fn main() {
         }
     });
 
+    let mut count = 0;
+
     for (file, results) in analyzer.finalize() {
-        println!("{:?}: {:?}", file, results);
+        let c = results.unused_symbols.len();
+        println!("{:?}: {:?}", file, c);
+        count += c;
     }
+    println!("TOTAL RESULTS: {}", count);
 }
