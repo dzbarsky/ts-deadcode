@@ -97,10 +97,16 @@ impl<'a> FileAnalyzer<'a> {
                         self.record_import(&file, ident.sym.clone());
                     }
                     _ => {
-                        panic!("unhandle object prop: {:?}", prop);
+                        println!(
+                            "WARNING: {}: unhandle object prop: {:?}",
+                            self.filename, prop
+                        );
                     }
                 },
-                _ => panic!("unhandle object prop: {:?}", prop),
+                _ => println!(
+                    "WARNING: {}: unhandle object prop: {:?}",
+                    self.filename, prop
+                ),
             }
         }
     }
@@ -355,7 +361,13 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                 self.record_destructured_import(file.clone(), object);
                                 None
                             }
-                            _ => panic!("unhandled var name"),
+                            _ => {
+                                println!(
+                                    "WARNING: {}: unhandled var name: {:?}",
+                                    self.filename, var.name
+                                );
+                                return;
+                            }
                         },
                         None => None,
                     }

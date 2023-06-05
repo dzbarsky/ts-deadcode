@@ -1,3 +1,4 @@
+use clap::Parser;
 use std::fs::{self, read_to_string, DirEntry};
 use std::io;
 use std::path::Path;
@@ -38,17 +39,35 @@ fn resolve(repo_root: &str, to: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn main() {
-    let tsconfig_path = std::env::args().nth(1).unwrap();
-    let repo_root = std::env::args().nth(2).unwrap();
+#[derive(Parser)]
+struct Cli {
+    repo_root: std::path::PathBuf,
 
+    #[clap(long, short, action)]
+    ignore_unused_type_exports: bool,
+
+    #[clap(long, short, action)]
+    allow_unused_export_if_used_in_self_module: bool,
+
+    #[clap(short = 'i', long)]
+    ignore: Vec<String>,
+}
+
+fn main() {
+    let args = Cli::parse();
+
+    let tsconfig_path = {
+        let mut path = args.repo_root.clone();
+        path.push("tsconfig.json");
+        path
+    };
     let tsconfig = TsConfig::parse_file(&tsconfig_path).unwrap();
     let mut resolved_paths = vec![];
     if let Some(compiler_options) = tsconfig.compiler_options {
         if let Some(paths) = compiler_options.paths {
             resolved_paths = paths
                 .into_iter()
-                .map(|(from, to)| (from, resolve(&repo_root, &to)))
+                .map(|(from, to)| (from, resolve(args.repo_root.to_str().unwrap(), &to)))
                 .collect();
         }
     }
@@ -68,15 +87,26 @@ fn main() {
     let mut analyzer = Analyzer::new(resolver);
 
     // Specify the directory containing the files to be parsed
-    let dir_path = Path::new(&repo_root);
+    let dir_path = Path::new(&args.repo_root);
 
     visit_dirs(dir_path, &mut |entry: &DirEntry| {
         let file_path = entry.path();
 
-        //println!("entry {:?}", entry);
+        for item in &args.ignore {
+            if file_path.iter().any(|c| item == c.to_str().unwrap()) {
+                return;
+            }
+        }
+
         if !file_path.to_str().unwrap().ends_with(".d.ts") {
             let ext = file_path.extension().unwrap_or_default();
-            if ext == "ts" || ext == "tsx" || ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs" {
+            if ext == "ts"
+                || ext == "tsx"
+                || ext == "js"
+                || ext == "jsx"
+                || ext == "mjs"
+                || ext == "cjs"
+            {
                 // Parse the file into an AST
                 // println!("analyzing file {:?}", file_path);
                 analyzer.add_file(&file_path);
@@ -91,23 +121,33 @@ fn main() {
     let mut files: Vec<(&FileName, &ModuleResults)> = results.iter().collect();
     files.sort_by_key(|(k, _)| *k);
     for (file, module_results) in files {
-        // Ignore type exports
-        let c = module_results.unused_exports.len();
-        if c == 0 {
-            continue;
+        let mut export_providers = vec![&module_results.unused_exports];
+        if !args.ignore_unused_type_exports {
+            export_providers.push(&module_results.unused_type_exports);
         }
 
-        if let FileName::Real(file) = file {
-            let contents = read_to_string(file).expect("should read file");
-            for export in &module_results.unused_exports {
-                let export = export.to_string();
-                let first_usage = contents.find(&export).unwrap();
-                match contents[first_usage + 1..].find(&export) {
-                    None => {
-                        println!("{:?}: {:?}", file, export);
-                        count += 1;
+        for unused_exports in export_providers {
+            let c = unused_exports.len();
+            if c == 0 {
+                continue;
+            }
+
+            if let FileName::Real(file) = file {
+                let contents = read_to_string(file).expect("should read file");
+                for export in unused_exports {
+                    let export = export.to_string();
+                    let first_usage = contents.find(&export).unwrap();
+                    match contents[first_usage + 1..].find(&export) {
+                        None => {
+                            println!("{:?}: {:?}", file, export);
+                            count += 1;
+                        }
+                        _ => {
+                            if !args.allow_unused_export_if_used_in_self_module {
+                                println!("{:?}: {:?} [USED IN FILE]", file, export);
+                            }
+                        }
                     }
-                    _ => println!("{:?}: {:?} [USED IN FILE]", file, export),
                 }
             }
         }
