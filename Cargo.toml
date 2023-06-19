@@ -12,4 +12,7 @@ swc_common = {version = "0.31.5", features = ["tty-emitter"]}
 swc_ecma_parser = {version = "0.133.11", features = ["typescript"]}
 swc_ecma_ast = "0.103.5"
 swc_ecma_visit = "0.89.5"
-swc_ecma_loader = {version = "0.43.7", features = ["node", "tsc"]}
+swc_ecma_loader = {path = "swc_ecma_loader", version = "0.43.7", features = ["node", "tsc"]}
+#swc_ecma_loader = {path = "swc_ecma_loader", features = ["node", "tsc"]}
+serde_json = "1.0.97"
+serde = "1.0.164"

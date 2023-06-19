@@ -1,6 +1,10 @@
 use clap::Parser;
+use serde::Deserialize;
+use std::env::set_current_dir;
+use std::fs::File;
 use std::fs::{self, read_to_string, DirEntry};
 use std::io;
+use std::io::BufReader;
 use std::path::Path;
 use swc_common::FileName;
 use swc_ecma_loader::{
@@ -43,19 +47,48 @@ fn resolve(repo_root: &str, to: &[String]) -> Vec<String> {
 struct Cli {
     repo_root: std::path::PathBuf,
 
-    #[clap(long, short, action)]
+    #[clap(long, action)]
     ignore_unused_type_exports: bool,
 
-    #[clap(long, short, action)]
+    #[clap(long, action)]
     allow_unused_export_if_used_in_self_module: bool,
 
     #[clap(short = 'i', long)]
     ignore: Vec<String>,
 }
 
+#[derive(Deserialize, Debug)]
+struct PackageJson {
+    name: Option<String>,
+}
+
 fn main() {
     let args = Cli::parse();
 
+    set_current_dir(&args.repo_root);
+
+    let mut aliases = vec![];
+    // Find internal packages to build resolver map.
+    visit_dirs(&args.repo_root, &mut |entry: &DirEntry| {
+        if entry.file_name() != "package.json" {
+            return;
+        }
+
+        let file = File::open(entry.path()).expect("file should exist");
+        let package_json: PackageJson =
+            serde_json::from_reader(BufReader::new(file)).expect("Failed to parse JSON");
+
+        if let Some(name) = package_json.name {
+            aliases.push((
+                name,
+                vec![entry.path().parent().unwrap().to_str().unwrap().to_owned()],
+            ))
+        }
+    });
+
+    // println!("ALIASES: {:?}", aliases);
+
+    /*
     let tsconfig_path = {
         let mut path = args.repo_root.clone();
         path.push("tsconfig.json");
@@ -72,11 +105,14 @@ fn main() {
         }
     }
 
+    println!("AA: {:?}", resolved_paths);
+    */
+
     let resolver = {
         let r = TsConfigResolver::new(
             NodeModulesResolver::new(TargetEnv::Node, Default::default(), false),
             ".".into(),
-            resolved_paths,
+            aliases,
         );
         //let r = CachingResolver::new(40, r);
 
