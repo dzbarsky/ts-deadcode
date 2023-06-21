@@ -55,6 +55,9 @@ struct Cli {
 
     #[clap(short = 'i', long)]
     ignore: Vec<String>,
+
+    #[clap(long, action)]
+    ignore_tests: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -134,19 +137,26 @@ fn main() {
             }
         }
 
-        if !file_path.to_str().unwrap().ends_with(".d.ts") {
-            let ext = file_path.extension().unwrap_or_default();
-            if ext == "ts"
-                || ext == "tsx"
-                || ext == "js"
-                || ext == "jsx"
-                || ext == "mjs"
-                || ext == "cjs"
-            {
-                // Parse the file into an AST
-                // println!("analyzing file {:?}", file_path);
-                analyzer.add_file(&file_path);
-            }
+        let filename = file_path.to_str().unwrap();
+        if filename.ends_with(".d.ts") {
+            return;
+        }
+
+        if args.ignore_tests && filename.ends_with(".test.tsx") {
+            return;
+        }
+
+        let ext = file_path.extension().unwrap_or_default();
+        if ext == "ts"
+            || ext == "tsx"
+            || ext == "js"
+            || ext == "jsx"
+            || ext == "mjs"
+            || ext == "cjs"
+        {
+            // Parse the file into an AST
+            // println!("analyzing file {:?}", file_path);
+            analyzer.add_file(&file_path);
         }
     })
     .expect("should not fail");
