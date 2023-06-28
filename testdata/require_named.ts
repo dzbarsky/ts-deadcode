@@ -1,12 +1,12 @@
-require('testdata/export_named.ts').Interface;
+require('./export_named').Interface;
 
-const named = require('testdata/export_named.ts');
+const named = require('./export_named');
 
 const {Type} = named;
 named.Var;
 
-const named2 = require('testdata/export_named.ts') as typeof import('testdata/export_named.ts');
+const named2 = require('./export_named') as typeof import('./export_named');
 named2.Enum;
 
-const Fn = require('testdata/export_named.ts').Fn as typeof import('testdata/export_named.ts').Fn;
-const Const = (require('testdata/export_named.ts') as typeof import('testdata/export_named.ts')).Const;
+const Fn = require('./export_named').Fn as typeof import('./export_named').Fn;
+const Const = (require('./export_named') as typeof import('./export_named')).Const;

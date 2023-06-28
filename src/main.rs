@@ -1,17 +1,10 @@
 use clap::Parser;
-use serde::Deserialize;
+use parcel_resolver::{OsFileSystem, Resolver};
+use std::collections::HashMap;
 use std::env::set_current_dir;
-use std::fs::File;
 use std::fs::{self, read_to_string, DirEntry};
 use std::io;
-use std::io::BufReader;
-use std::path::Path;
-use swc_common::FileName;
-use swc_ecma_loader::{
-    resolvers::{/*lru::CachingResolver, */ node::NodeModulesResolver, tsc::TsConfigResolver},
-    TargetEnv,
-};
-use tsconfig::TsConfig;
+use std::path::{Path, PathBuf};
 
 use ts_deadcode::{Analyzer, ModuleResults};
 
@@ -28,19 +21,6 @@ fn visit_dirs(dir: &Path, cb: &mut dyn for<'a> FnMut(&'a DirEntry)) -> io::Resul
         }
     }
     Ok(())
-}
-
-fn resolve(repo_root: &str, to: &[String]) -> Vec<String> {
-    to.iter()
-        .map(|s| {
-            let mut resolved = repo_root.to_owned();
-            resolved.push_str(&s[1..]);
-            if &s[s.len() - 1..] != "*" {
-                resolved.push_str(".tsx");
-            }
-            resolved
-        })
-        .collect()
 }
 
 #[derive(Parser)]
@@ -60,70 +40,28 @@ struct Cli {
     ignore_tests: bool,
 }
 
-#[derive(Deserialize, Debug)]
-struct PackageJson {
-    name: Option<String>,
-}
-
 fn main() {
     let args = Cli::parse();
 
-    set_current_dir(&args.repo_root);
+    set_current_dir(&args.repo_root).expect("should set current dir");
 
-    let mut aliases = vec![];
     // Find internal packages to build resolver map.
+    let mut resolvers = HashMap::new();
     visit_dirs(&args.repo_root, &mut |entry: &DirEntry| {
         if entry.file_name() != "package.json" {
             return;
         }
 
-        let file = File::open(entry.path()).expect("file should exist");
-        let package_json: PackageJson =
-            serde_json::from_reader(BufReader::new(file)).expect("Failed to parse JSON");
-
-        if let Some(name) = package_json.name {
-            aliases.push((
-                name,
-                vec![entry.path().parent().unwrap().to_str().unwrap().to_owned()],
-            ))
-        }
-    });
-
-    // println!("ALIASES: {:?}", aliases);
-
-    /*
-    let tsconfig_path = {
-        let mut path = args.repo_root.clone();
-        path.push("tsconfig.json");
-        path
-    };
-    let tsconfig = TsConfig::parse_file(&tsconfig_path).unwrap();
-    let mut resolved_paths = vec![];
-    if let Some(compiler_options) = tsconfig.compiler_options {
-        if let Some(paths) = compiler_options.paths {
-            resolved_paths = paths
-                .into_iter()
-                .map(|(from, to)| (from, resolve(args.repo_root.to_str().unwrap(), &to)))
-                .collect();
-        }
-    }
-
-    println!("AA: {:?}", resolved_paths);
-    */
-
-    let resolver = {
-        let r = TsConfigResolver::new(
-            NodeModulesResolver::new(TargetEnv::Node, Default::default(), false),
-            ".".into(),
-            aliases,
+        let project = PathBuf::from(entry.path().parent().unwrap());
+        let resolver = Resolver::parcel(
+            project.clone().into(),
+            parcel_resolver::CacheCow::Owned(parcel_resolver::Cache::new(OsFileSystem)),
         );
-        //let r = CachingResolver::new(40, r);
+        resolvers.insert(project, resolver);
+    })
+    .expect("Failed to build resolver map");
 
-        //let r = NodeImportResolver::new(r);
-        Box::new(r)
-    };
-
-    let mut analyzer = Analyzer::new(resolver);
+    let mut analyzer = Analyzer::new();
 
     // Specify the directory containing the files to be parsed
     let dir_path = Path::new(&args.repo_root);
@@ -154,9 +92,16 @@ fn main() {
             || ext == "mjs"
             || ext == "cjs"
         {
-            // Parse the file into an AST
-            // println!("analyzing file {:?}", file_path);
-            analyzer.add_file(&file_path);
+            // Find the resolver for the nearest enclosing project
+            let mut package_path = file_path.clone();
+            while let Some(package_path_parent) = package_path.parent() {
+                if let Some(resolver) = resolvers.get(package_path_parent) {
+                    analyzer.add_file(resolver, &file_path);
+                    return;
+                }
+                package_path = package_path_parent.into();
+            }
+            println!("no resolver for {:?}", file_path);
         }
     })
     .expect("should not fail");
@@ -164,7 +109,7 @@ fn main() {
     let mut count = 0;
 
     let results = analyzer.finalize();
-    let mut files: Vec<(&FileName, &ModuleResults)> = results.iter().collect();
+    let mut files: Vec<(&PathBuf, &ModuleResults)> = results.iter().collect();
     files.sort_by_key(|(k, _)| *k);
     for (file, module_results) in files {
         let mut export_providers = vec![&module_results.unused_exports];
@@ -178,20 +123,18 @@ fn main() {
                 continue;
             }
 
-            if let FileName::Real(file) = file {
-                let contents = read_to_string(file).expect("should read file");
-                for export in unused_exports {
-                    let export = export.to_string();
-                    let first_usage = contents.find(&export).unwrap();
-                    match contents[first_usage + 1..].find(&export) {
-                        None => {
-                            println!("{:?}: {:?}", file, export);
-                            count += 1;
-                        }
-                        _ => {
-                            if !args.allow_unused_export_if_used_in_self_module {
-                                println!("{:?}: {:?} [USED IN FILE]", file, export);
-                            }
+            let contents = read_to_string(file).expect("should read file");
+            for export in unused_exports {
+                let export = export.to_string();
+                let first_usage = contents.find(&export).unwrap();
+                match contents[first_usage + 1..].find(&export) {
+                    None => {
+                        println!("{:?}: {:?}", file, export);
+                        count += 1;
+                    }
+                    _ => {
+                        if !args.allow_unused_export_if_used_in_self_module {
+                            println!("{:?}: {:?} [USED IN FILE]", file, export);
                         }
                     }
                 }

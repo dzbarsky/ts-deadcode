@@ -5,4 +5,4 @@ import {
   	AliasedVar as LocalVar,
   	AliasedInterface as LocalInterace,
   	AliasedType as LocalType,
-} from 'testdata/export_named_aliased.ts';
+} from './export_named_aliased';

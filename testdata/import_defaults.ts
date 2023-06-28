@@ -1,7 +1,7 @@
-import LocalFn from 'testdata/export_default_function.ts';
-import * as LocalClass from 'testdata/export_default_class.ts';
+import LocalFn from './export_default_function';
+import * as LocalClass from './export_default_class';
 const {default} = LocalClass;
 
-import * as LocalObject from 'testdata/export_default_object.ts';
+import * as LocalObject from './export_default_object';
 const {default: localObj} = LocalObject;
 

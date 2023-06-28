@@ -1,12 +1,12 @@
-(await import('testdata/export_named.ts')).Interface;
+(await import('./export_named')).Interface;
 
-const named = await import('testdata/export_named.ts');
+const named = await import('./export_named');
 
 const {Type} = named;
 named.Var;
 
-import('testdata/export_named.ts').then(mod => {
+import('./export_named').then(mod => {
     mod.Enum;
     const {Fn} = mod;
 });
-import('testdata/export_named.ts').then((mod: any) => mod.Const);
+import('./export_named').then((mod: any) => mod.Const);

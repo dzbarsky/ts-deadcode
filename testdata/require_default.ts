@@ -1,4 +1,4 @@
-require('testdata/export_default_class.ts').default;
+require('./export_default_class').default;
 
-const func = require('testdata/export_default_function.ts');
+const func = require('./export_default_function');
 func.default;

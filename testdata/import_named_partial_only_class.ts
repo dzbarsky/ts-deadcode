@@ -1,4 +1,4 @@
 import {
   Class,
-} from 'testdata/export_named.ts';
+} from './export_named';
 

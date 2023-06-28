@@ -1,7 +1,7 @@
-import * as mod from 'testdata/export_foo.ts';
+import * as mod from './export_foo';
 mod.foo;
 
-import('testdata/export_bar.ts').then(mod => {
+import('./export_bar').then(mod => {
   const {bar, baz} = mod;
 });
 

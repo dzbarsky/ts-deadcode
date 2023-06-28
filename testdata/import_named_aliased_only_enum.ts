@@ -1,3 +1,3 @@
 import {
   	AliasedEnum as LocalEnum,
-} from 'testdata/export_named_aliased.ts';
+} from './export_named_aliased';

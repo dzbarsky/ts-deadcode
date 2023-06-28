@@ -1,4 +1,4 @@
-import * as utils from 'testdata/export_named.ts';
+import * as utils from './export_named.ts';
 
 const {Class, Fn} = utils;
 

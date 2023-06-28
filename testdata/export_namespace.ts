@@ -1,1 +1,1 @@
-export * as Namespace from 'export_decl.ts';
+export * as Namespace from './export_decl';

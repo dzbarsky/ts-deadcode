@@ -2,14 +2,14 @@ use std::collections::{HashMap, HashSet};
 
 use std::path::{Path, PathBuf};
 
+use parcel_resolver::{FileSystem, Resolution, Resolver, SpecifierType};
 use swc_atoms::JsWord;
 use swc_common::{
     errors::{ColorConfig, Handler},
     sync::Lrc,
-    FileName, SourceMap,
+    SourceMap,
 };
 use swc_ecma_ast::*;
-use swc_ecma_loader::resolve::Resolve;
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
 use swc_ecma_visit::Visit;
 use swc_ecma_visit::VisitWith;
@@ -17,7 +17,7 @@ use swc_ecma_visit::VisitWith;
 #[derive(Debug)]
 pub struct ImportUsage {
     // Filename -> symbols
-    imports: HashMap<FileName, HashSet<JsWord>>,
+    imports: HashMap<PathBuf, HashSet<JsWord>>,
 }
 
 impl ImportUsage {
@@ -35,8 +35,8 @@ fn export_name_atom(export: &ModuleExportName) -> JsWord {
     }
 }
 
-pub struct FileAnalyzer<'a> {
-    filename: String,
+pub struct FileAnalyzer<'a, FS: FileSystem> {
+    filename: PathBuf,
     // exported_name -> original_name
     exports: HashMap<JsWord, JsWord>,
     type_exports: HashMap<JsWord, JsWord>,
@@ -44,13 +44,17 @@ pub struct FileAnalyzer<'a> {
     // local name -> file
     namespace_imports: HashMap<JsWord, JsWord>,
 
-    resolver: &'a dyn Resolve,
+    resolver: &'a Resolver<'a, FS>,
 }
 
-impl<'a> FileAnalyzer<'a> {
-    fn new(filename: String, resolver: &'a dyn Resolve, import_usage: &'a mut ImportUsage) -> Self {
+impl<'a, FS: FileSystem> FileAnalyzer<'a, FS> {
+    fn new(
+        filename: String,
+        resolver: &'a Resolver<'a, FS>,
+        import_usage: &'a mut ImportUsage,
+    ) -> Self {
         Self {
-            filename,
+            filename: PathBuf::from(&filename),
             exports: HashMap::new(),
             type_exports: HashMap::new(),
             namespace_imports: HashMap::new(),
@@ -60,19 +64,33 @@ impl<'a> FileAnalyzer<'a> {
     }
 
     fn record_import(&mut self, path: &JsWord, symbol: JsWord) {
+        // Something about this module is wonky, ignore it.
+        if *path == *"csstype" {
+            println!("Got csstype: {}", symbol);
+            return;
+        }
+        //println!("Importing {} from {}", path, self.filename.display());
+
         match self
             .resolver
-            .resolve(&FileName::Real(PathBuf::from(self.filename.clone())), path)
+            .resolve(path, &self.filename, SpecifierType::Esm)
+            .result
         {
-            Ok(filename) => {
+            Ok((Resolution::Path(filename), _)) => {
+                //println!("Resolved to {}", filename.display());
                 self.import_usage
                     .imports
                     .entry(filename)
                     .or_default()
                     .insert(symbol);
             }
+            Ok((Resolution::Builtin(_), _)) => {}
+            Ok((Resolution::Empty, _)) => {}
             Err(err) => {
-                println!("ERRRR {:?} {:?}", path, err);
+                println!("ERROR {:?} {:?}", self.filename, err);
+            }
+            resolution => {
+                panic!("Got resolution {:?}", resolution);
             }
         }
     }
@@ -99,13 +117,15 @@ impl<'a> FileAnalyzer<'a> {
                     _ => {
                         println!(
                             "WARNING: {}: unhandle object prop: {:?}",
-                            self.filename, prop
+                            self.filename.display(),
+                            prop
                         );
                     }
                 },
                 _ => println!(
                     "WARNING: {}: unhandle object prop: {:?}",
-                    self.filename, prop
+                    self.filename.display(),
+                    prop
                 ),
             }
         }
@@ -153,7 +173,7 @@ impl<'a> FileAnalyzer<'a> {
                             Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
                             _ => println!(
                                 "WARNING: {}: unhandled non-literal require",
-                                self.filename
+                                self.filename.display()
                             ),
                         }
                     }
@@ -168,7 +188,10 @@ impl<'a> FileAnalyzer<'a> {
             Callee::Super(_) => {}
             Callee::Import(_import) => match *call.args[0].expr {
                 Expr::Lit(Lit::Str(ref file)) => return Some(file.value.clone()),
-                _ => println!("WARNING: {}: unhandled non-literal require", self.filename),
+                _ => println!(
+                    "WARNING: {}: unhandled non-literal require",
+                    self.filename.display()
+                ),
             },
             Callee::Expr(_expr) => {}
         }
@@ -176,7 +199,7 @@ impl<'a> FileAnalyzer<'a> {
     }
 }
 
-impl<'a> Visit for FileAnalyzer<'a> {
+impl<'a, FS: FileSystem> Visit for FileAnalyzer<'a, FS> {
     fn visit_module_decl(&mut self, decl: &ModuleDecl) {
         match decl {
             ModuleDecl::Import(import_decl) => {
@@ -245,7 +268,8 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                             }
                                             _ => panic!(
                                                 "{}: unknown array export pat: {:?}",
-                                                self.filename, elem
+                                                self.filename.display(),
+                                                elem
                                             ),
                                         }
                                     }
@@ -263,18 +287,22 @@ impl<'a> Visit for FileAnalyzer<'a> {
                                                     if let Pat::Ident(binding_ident) = &*kv_pat_prop.value {
                                                         self.record_export(&ident.sym, &binding_ident.id.sym);
                                                     } else {
-                                                        panic!("{}: unknown object export kv_pat_prop: {:?}", self.filename, kv_pat_prop);
+                                                        panic!("{}: unknown object export kv_pat_prop: {:?}", self.filename.display(), kv_pat_prop);
                                                     }
                                                 }
-                                                _ => panic!("{}: unknown object export kv_pat_prop: {:?}", self.filename, kv_pat_prop),
+                                                _ => panic!("{}: unknown object export kv_pat_prop: {:?}", self.filename.display(), kv_pat_prop),
                                             }
                                         }
-                                        _ => panic!("{}: unknown object export pat: {:?}", self.filename, prop),
+                                        _ => panic!("{}: unknown object export pat: {:?}", self.filename.display(), prop),
                                     }
                                     }
                                 }
                                 _ => {
-                                    panic!("{}: unknown decl.name: {:?}", self.filename, decl.name)
+                                    panic!(
+                                        "{}: unknown decl.name: {:?}",
+                                        self.filename.display(),
+                                        decl.name
+                                    )
                                 }
                             }
                         }
@@ -295,7 +323,10 @@ impl<'a> Visit for FileAnalyzer<'a> {
                         //println!("{}: enum decl {:?}", self.filename, atom);
                     }
                     _ => {
-                        println!("WARNING: {}: unhandled export namespace", self.filename);
+                        println!(
+                            "WARNING: {}: unhandled export namespace",
+                            self.filename.display()
+                        );
                     }
                 }
             }
@@ -337,7 +368,8 @@ impl<'a> Visit for FileAnalyzer<'a> {
             _ => {
                 println!(
                     "WARNING: {}: unhandled ModuleDecl {:?}",
-                    self.filename, decl
+                    self.filename.display(),
+                    decl
                 );
             }
         }
@@ -364,7 +396,8 @@ impl<'a> Visit for FileAnalyzer<'a> {
                             _ => {
                                 println!(
                                     "WARNING: {}: unhandled var name: {:?}",
-                                    self.filename, var.name
+                                    self.filename.display(),
+                                    var.name
                                 );
                                 return;
                             }
@@ -425,7 +458,8 @@ impl<'a> Visit for FileAnalyzer<'a> {
                         }
                         _ => println!(
                             "WARNING: {}: unhandled MemberExpr: {:?}",
-                            self.filename, member_expr
+                            self.filename.display(),
+                            member_expr
                         ),
                     }
                 }
@@ -517,7 +551,7 @@ pub struct ModuleResults {
     pub unused_exports: HashSet<JsWord>,
     pub unused_type_exports: HashSet<JsWord>,
 }
-pub type AnalysisResults = HashMap<FileName, ModuleResults>;
+pub type AnalysisResults = HashMap<PathBuf, ModuleResults>;
 
 pub struct Analyzer {
     import_usage: ImportUsage,
@@ -525,24 +559,21 @@ pub struct Analyzer {
     cm: Lrc<SourceMap>,
     handler: Handler,
 
-    resolver: Box<dyn Resolve>,
-
-    exports: HashMap<FileName, ModuleExports>,
+    exports: HashMap<PathBuf, ModuleExports>,
 }
 
 impl Analyzer {
-    pub fn new(resolver: Box<dyn Resolve>) -> Self {
+    pub fn new() -> Self {
         let cm: Lrc<SourceMap> = Default::default();
         Self {
             import_usage: ImportUsage::new(),
             handler: Handler::with_tty_emitter(ColorConfig::Auto, true, false, Some(cm.clone())),
             exports: HashMap::new(),
-            resolver,
             cm,
         }
     }
 
-    pub fn add_file(&mut self, file_path: &Path) {
+    pub fn add_file<'a, FS: FileSystem>(&mut self, resolver: &Resolver<'a, FS>, file_path: &Path) {
         // Parse the file into an AST
         //println!("loading file {:?}", file_path);
         let fm = self.cm.load_file(file_path).expect("failed to load file");
@@ -550,7 +581,7 @@ impl Analyzer {
         // Create a visitor to traverse the ASTs and record imported and exported symbols
         let mut visitor = FileAnalyzer::new(
             file_path.to_str().unwrap().to_owned(),
-            &self.resolver,
+            resolver,
             &mut self.import_usage,
         );
 
@@ -586,7 +617,7 @@ impl Analyzer {
 
         //println!("done with {:?}", visitor.filename);
         self.exports.insert(
-            FileName::Real(visitor.filename.into()),
+            visitor.filename.into(),
             ModuleExports {
                 exports: visitor.exports,
                 type_exports: visitor.type_exports,
@@ -638,30 +669,24 @@ impl Analyzer {
 #[cfg(test)]
 mod tests {
     use crate::*;
-    use anyhow::Error;
+    use parcel_resolver::OsFileSystem;
     use std::fs::canonicalize;
 
-    // A hacky dummy resolver since testdata isn't a real setup (no node_modules/package.json, etc)
-    struct Resolver {}
-    impl Resolve for Resolver {
-        fn resolve(&self, base: &FileName, module_specifier: &str) -> Result<FileName, Error> {
-            Ok(FileName::Real(PathBuf::from(
-                canonicalize(module_specifier).unwrap(),
-            )))
-        }
-    }
-
     fn analyze(filepaths: Vec<&str>) -> AnalysisResults {
-        let mut analyzer = Analyzer::new(Box::new(Resolver {}));
+        let resolver = Resolver::node(
+            PathBuf::from("testdata").into(),
+            parcel_resolver::CacheCow::Owned(parcel_resolver::Cache::new(OsFileSystem)),
+        );
+        let mut analyzer = Analyzer::new();
         for filepath in filepaths {
             let path = canonicalize(filepath).unwrap();
-            analyzer.add_file(Path::new(&path));
+            analyzer.add_file(&resolver, Path::new(&path));
         }
         analyzer.finalize()
     }
 
-    fn path(filename: &str) -> FileName {
-        FileName::Real(PathBuf::from(canonicalize(filename).unwrap()))
+    fn path(filename: &str) -> PathBuf {
+        canonicalize(filename).unwrap().into()
     }
 
     #[test]
