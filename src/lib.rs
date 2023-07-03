@@ -44,6 +44,8 @@ pub struct FileAnalyzer<'a, FS: FileSystem> {
     // local name -> file
     namespace_imports: HashMap<JsWord, JsWord>,
 
+    export_alls: Vec<PathBuf>,
+
     resolver: &'a Resolver<'a, FS>,
     resolve_options: ResolveOptions,
 }
@@ -60,6 +62,7 @@ impl<'a, FS: FileSystem> FileAnalyzer<'a, FS> {
             exports: HashMap::new(),
             type_exports: HashMap::new(),
             namespace_imports: HashMap::new(),
+            export_alls: Vec::new(),
             import_usage,
             resolver,
             resolve_options,
@@ -119,6 +122,35 @@ impl<'a, FS: FileSystem> FileAnalyzer<'a, FS> {
     fn record_type_export(&mut self, exported_name: &JsWord, original_name: &JsWord) {
         self.type_exports
             .insert(exported_name.clone(), original_name.clone());
+    }
+
+    fn record_export_all(&mut self, path: &JsWord) {
+        match self
+            .resolver
+            .resolve_with_options(
+                path,
+                &self.filename,
+                SpecifierType::Esm,
+                ResolveOptions {
+                    conditions: self.resolve_options.conditions.clone(),
+                    custom_conditions: self.resolve_options.custom_conditions.clone(),
+                },
+            )
+            .result
+        {
+            Ok((Resolution::Path(filename), _)) => {
+                println!("Resolved to {}", filename.display());
+                self.export_alls.push(filename);
+            }
+            Ok((Resolution::Builtin(_), _)) => {}
+            Ok((Resolution::Empty, _)) => {}
+            Err(err) => {
+                println!("ERROR {:?} {:?}", self.filename, err);
+            }
+            resolution => {
+                panic!("Got resolution {:?}", resolution);
+            }
+        }
     }
 
     // When an import object is destructured, this marks all the object keys as imported.
@@ -374,7 +406,9 @@ impl<'a, FS: FileSystem> Visit for FileAnalyzer<'a, FS> {
                     }
                 }
             }
-            ModuleDecl::ExportAll(_export_all) => {}
+            ModuleDecl::ExportAll(export_all) => {
+                self.record_export_all(&export_all.src.value);
+            }
             ModuleDecl::ExportDefaultDecl(_export_default_decl) => {
                 self.record_export(&"default".into(), &"default".into())
             }
@@ -560,6 +594,7 @@ pub struct ModuleExports {
     // exported_name -> original_name
     exports: HashMap<JsWord, JsWord>,
     type_exports: HashMap<JsWord, JsWord>,
+    export_alls: Vec<PathBuf>,
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -644,48 +679,92 @@ impl Analyzer {
             ModuleExports {
                 exports: visitor.exports,
                 type_exports: visitor.type_exports,
+                export_alls: visitor.export_alls,
             },
         );
     }
 
     pub fn finalize(self) -> AnalysisResults {
         let mut results = AnalysisResults::new();
-        for (file, exports) in self.exports {
+        for (file, exports) in &self.exports {
             let mut module_results = ModuleResults {
                 unused_exports: HashSet::new(),
                 unused_type_exports: HashSet::new(),
             };
-            let imports = self.import_usage.imports.get(&file);
+            let imports = self.import_usage.imports.get(file);
 
-            for (exported_name, original_name) in exports.exports {
+            for (exported_name, original_name) in &exports.exports {
                 //if !imports.is_some_and(|v| v.contains(&exported_name)) {
                 let used = match imports {
                     Some(v) => v.contains(&exported_name),
                     None => false,
                 };
                 if !used {
-                    module_results.unused_exports.insert(original_name);
+                    module_results
+                        .unused_exports
+                        .insert(original_name.to_owned());
                 }
             }
 
-            for (exported_name, original_name) in exports.type_exports {
+            for (exported_name, original_name) in &exports.type_exports {
                 //if !imports.is_some_and(|v| v.contains(&exported_name)) {
                 let used = match imports {
                     Some(v) => v.contains(&exported_name),
                     None => false,
                 };
                 if !used {
-                    module_results.unused_type_exports.insert(original_name);
+                    module_results
+                        .unused_type_exports
+                        .insert(original_name.to_owned());
                 }
             }
 
-            if !module_results.unused_exports.is_empty()
-                || !module_results.unused_type_exports.is_empty()
-            {
-                results.insert(file, module_results);
+            results.insert(file.into(), module_results);
+        }
+
+        // Trace from the other side to resolve any star-imports (which may be chained)
+        for (filename, symbols) in &self.import_usage.imports {
+            for symbol in symbols {
+                //println!("checking symbol {}.{}", filename.display(), symbol);
+                match self.trace_export(filename.into(), &symbol) {
+                    Some(providing_module) => {
+                        //println!("traced symbol {}.{}", providing_module.display(), symbol);
+                        let module_results = results.get_mut(&providing_module).unwrap();
+                        module_results.unused_exports.remove(&symbol);
+                        module_results.unused_type_exports.remove(&symbol);
+                    }
+                    None => continue, //panic!("symbol not found"),
+                }
             }
         }
+
+        results.retain(|_, module_results| {
+            !module_results.unused_exports.is_empty()
+                || !module_results.unused_type_exports.is_empty()
+        });
+
         results
+    }
+
+    fn trace_export<'a>(&self, filename: PathBuf, symbol: &JsWord) -> Option<PathBuf> {
+        let exports = match self.exports.get(&filename) {
+            Some(exports) => exports,
+            None => return None,
+            //panic!("gah not found: {}", filename.display()),
+        };
+
+        if exports.exports.contains_key(symbol) || exports.type_exports.contains_key(symbol) {
+            return Some(filename);
+        }
+
+        for export_all in exports.export_alls.iter().rev() {
+            let maybe_path = self.trace_export(export_all.into(), symbol);
+            if maybe_path.is_some() {
+                return maybe_path;
+            }
+        }
+
+        None
     }
 }
 
