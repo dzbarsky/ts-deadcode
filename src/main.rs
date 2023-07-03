@@ -1,5 +1,5 @@
 use clap::Parser;
-use parcel_resolver::{OsFileSystem, Resolver};
+use parcel_resolver::{OsFileSystem, ResolveOptions, Resolver};
 use std::collections::HashMap;
 use std::env::set_current_dir;
 use std::fs::{self, read_to_string, DirEntry};
@@ -36,6 +36,9 @@ struct Cli {
     #[clap(short = 'i', long)]
     ignore: Vec<String>,
 
+    #[clap(long = "custom-condition")]
+    custom_conditions: Vec<String>,
+
     #[clap(long, action)]
     ignore_tests: bool,
 }
@@ -61,7 +64,10 @@ fn main() {
     })
     .expect("Failed to build resolver map");
 
-    let mut analyzer = Analyzer::new();
+    let mut analyzer = Analyzer::new(ResolveOptions {
+        conditions: Default::default(),
+        custom_conditions: args.custom_conditions,
+    });
 
     // Specify the directory containing the files to be parsed
     let dir_path = Path::new(&args.repo_root);

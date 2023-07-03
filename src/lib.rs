@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use std::path::{Path, PathBuf};
 
-use parcel_resolver::{FileSystem, Resolution, Resolver, SpecifierType};
+use parcel_resolver::{FileSystem, Resolution, ResolveOptions, Resolver, SpecifierType};
 use swc_atoms::JsWord;
 use swc_common::{
     errors::{ColorConfig, Handler},
@@ -45,12 +45,14 @@ pub struct FileAnalyzer<'a, FS: FileSystem> {
     namespace_imports: HashMap<JsWord, JsWord>,
 
     resolver: &'a Resolver<'a, FS>,
+    resolve_options: ResolveOptions,
 }
 
 impl<'a, FS: FileSystem> FileAnalyzer<'a, FS> {
     fn new(
         filename: String,
         resolver: &'a Resolver<'a, FS>,
+        resolve_options: ResolveOptions,
         import_usage: &'a mut ImportUsage,
     ) -> Self {
         Self {
@@ -60,6 +62,7 @@ impl<'a, FS: FileSystem> FileAnalyzer<'a, FS> {
             namespace_imports: HashMap::new(),
             import_usage,
             resolver,
+            resolve_options,
         }
     }
 
@@ -69,11 +72,24 @@ impl<'a, FS: FileSystem> FileAnalyzer<'a, FS> {
             println!("Got csstype: {}", symbol);
             return;
         }
-        //println!("Importing {} from {}", path, self.filename.display());
+        /*println!(
+            "Importing {}.{} from {}",
+            path,
+            symbol,
+            self.filename.display()
+        );*/
 
         match self
             .resolver
-            .resolve(path, &self.filename, SpecifierType::Esm)
+            .resolve_with_options(
+                path,
+                &self.filename,
+                SpecifierType::Esm,
+                ResolveOptions {
+                    conditions: self.resolve_options.conditions.clone(),
+                    custom_conditions: self.resolve_options.custom_conditions.clone(),
+                },
+            )
             .result
         {
             Ok((Resolution::Path(filename), _)) => {
@@ -560,15 +576,18 @@ pub struct Analyzer {
     handler: Handler,
 
     exports: HashMap<PathBuf, ModuleExports>,
+
+    resolve_options: ResolveOptions,
 }
 
 impl Analyzer {
-    pub fn new() -> Self {
+    pub fn new(resolve_options: ResolveOptions) -> Self {
         let cm: Lrc<SourceMap> = Default::default();
         Self {
             import_usage: ImportUsage::new(),
             handler: Handler::with_tty_emitter(ColorConfig::Auto, true, false, Some(cm.clone())),
             exports: HashMap::new(),
+            resolve_options,
             cm,
         }
     }
@@ -582,6 +601,10 @@ impl Analyzer {
         let mut visitor = FileAnalyzer::new(
             file_path.to_str().unwrap().to_owned(),
             resolver,
+            ResolveOptions {
+                conditions: self.resolve_options.conditions.clone(),
+                custom_conditions: self.resolve_options.custom_conditions.clone(),
+            },
             &mut self.import_usage,
         );
 
@@ -673,11 +696,11 @@ mod tests {
     use std::fs::canonicalize;
 
     fn analyze(filepaths: Vec<&str>) -> AnalysisResults {
-        let resolver = Resolver::node(
+        let resolver = Resolver::parcel(
             PathBuf::from("testdata").into(),
             parcel_resolver::CacheCow::Owned(parcel_resolver::Cache::new(OsFileSystem)),
         );
-        let mut analyzer = Analyzer::new();
+        let mut analyzer = Analyzer::new(Default::default());
         for filepath in filepaths {
             let path = canonicalize(filepath).unwrap();
             analyzer.add_file(&resolver, Path::new(&path));
@@ -921,5 +944,35 @@ mod tests {
     fn acid_test() {
         let results = analyze(vec!["testdata/acid.ts"]);
         assert_eq!(results, HashMap::from([]),);
+    }
+
+    #[test]
+    fn export_star_test() {
+        let results = analyze(vec![
+            "testdata/export_foo.ts",
+            "testdata/export_bar.ts",
+            "testdata/reexport_all.ts",
+            "testdata/reexport_all_again.ts",
+            "testdata/import_reexported.ts",
+        ]);
+        assert_eq!(
+            results,
+            HashMap::from([
+                (
+                    path("testdata/export_foo.ts"),
+                    ModuleResults {
+                        unused_exports: HashSet::from(["foo".into(), "bar".into(), "baz".into(),]),
+                        ..Default::default()
+                    }
+                ),
+                (
+                    path("testdata/export_bar.ts"),
+                    ModuleResults {
+                        unused_exports: HashSet::from(["baz".into(),]),
+                        ..Default::default()
+                    }
+                )
+            ])
+        );
     }
 }
